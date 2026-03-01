@@ -53,6 +53,18 @@ todos:
   - id: infra-setup
     content: 编写 Docker Compose 及 Nginx 配置，整合所有服务，配置 CI/CD
     status: pending
+  - id: clawhub-integration
+    content: 实现 ClaWHub 桥接（搜索/安装/发布 API + 前端 Skill 市场页），将平台内置 Skills 发布到 clawhub.ai
+    status: pending
+  - id: mcp-store
+    content: 实现 MCP Server 商店（mcporter 集成、MCP 工具同步到 Tool Registry、前端商店页）
+    status: pending
+  - id: evomap-integration
+    content: 实现 EvoMap GEP 接入（进化经验 → GEP Genome 编码、Evolution Sandbox 验证、Capability Evolver 推荐）
+    status: pending
+  - id: tool-registry-ecosystem
+    content: 完整实现工具注册表四维分类体系（平台内置 + 设备原生 + MCP + ClaWHub/EvoMap 社区）
+    status: pending
 isProject: false
 ---
 
@@ -1596,9 +1608,607 @@ process.exit(0);
 
 ### Phase 4 — 开放生态（约 8 周）
 
-- 工具市场（第三方工具发布 & 审核流程）
+- ClaWHub Skill 市场桥接（搜索、安装、发布）
+- MCP Server 商店（mcporter 集成、MCP 工具一键接入）
+- EvoMap GEP 进化协议接入（Capability Evolver + 跨模型能力继承）
 - 扩展设备插件 SDK 文档 & 社区示例
 - `extensions/aifuturecity/` 发布到 npm 公开注册表
 - The Graph 子图部署（合约事件全量索引）
 - Arbitrum 主网合约部署
+
+---
+
+## 十三、开放生态接入层（Tools / MCP / Skills / ClaWHub / EvoMap）
+
+> 本章描述 AIFutureCity 如何接入外部开源生态，将 ClaWHub、EvoMap、MCP 三大生态纳入平台的 Skill 市场和工具注册表，实现能力的开放流通。
+
+---
+
+### 13.1 生态全景图
+
+```mermaid
+flowchart TB
+    subgraph aifc [AIFutureCity 平台]
+        SKILL_MKT[Skill 市场\nAIFutureCity Native]
+        TOOL_REG[工具注册表\nTool Registry]
+        EVO_ENG[进化引擎\nEvolution Engine]
+        ASSISTANT[AI 助手]
+    end
+
+    subgraph clawhub_eco [ClaWHub 生态\nclawhub.ai]
+        CH_REG[ClaWHub 公开注册表\n技能发现 & 版本管理]
+        CH_CLI[clawhub CLI\ninstall / publish / sync]
+        CH_SKILL[社区 Skills\n数千个公开技能]
+    end
+
+    subgraph evomap_eco [EvoMap 生态\nevomap.ai]
+        GEP[Genome Evolution Protocol\nGEP 进化协议]
+        CAP_EVO[Capability Evolver\nClaWHub #1 下载 Skill]
+        CAP_MKT[Agent Capability Marketplace]
+        EVO_SANDBOX[Evolution Sandbox\n跨模型能力继承]
+    end
+
+    subgraph mcp_eco [MCP 生态\nModel Context Protocol]
+        MCPORTER[mcporter\nOpenClaw MCP 桥接]
+        MCP_SERVERS[MCP Servers\nGitHub / Slack / DB / Drive / ...]
+        MCP_REGISTRY[MCP Server 商店]
+    end
+
+    subgraph oc [OpenClaw 实例\n用户设备]
+        OC_SKILLS[已安装 Skills]
+        OC_TOOLS[已注册 Tools]
+        OC_MCP[mcporter 桥接]
+    end
+
+    CH_REG -->|clawhub install| OC_SKILLS
+    CH_REG -->|API 桥接| SKILL_MKT
+    OC_SKILLS -->|同步| ASSISTANT
+
+    CAP_EVO -->|ClaWHub 安装| OC_SKILLS
+    GEP -->|进化建议| EVO_ENG
+    CAP_MKT -->|能力导入| TOOL_REG
+    EVO_SANDBOX -->|验证后继承| ASSISTANT
+
+    MCP_SERVERS -->|mcporter| OC_MCP
+    OC_MCP -->|工具暴露| OC_TOOLS
+    MCP_REGISTRY -->|一键安装| MCPORTER
+    OC_TOOLS -->|同步| TOOL_REG
+```
+
+
+
+---
+
+### 13.2 Skills 四级体系
+
+AIFutureCity 的 Skill 体系分为四个来源层级：
+
+
+| 层级                  | 来源                            | 管理方式           | 可见性 |
+| ------------------- | ----------------------------- | -------------- | --- |
+| L1 平台核心 Skill       | AIFutureCity 内置（`skills/` 目录） | 平台维护           | 全平台 |
+| L2 ClaWHub 公共 Skill | clawhub.ai 注册表                | 社区维护，平台桥接      | 全平台 |
+| L3 EvoMap 进化能力      | EvoMap GEP 协议                 | AI 自主进化 + 社区验证 | 全平台 |
+| L4 用户私有 Skill       | 用户自定义 Markdown                | 用户自管           | 仅本人 |
+
+
+**Skill 文件格式**（统一兼容 OpenClaw + ClaWHub 标准）：
+
+```markdown
+---
+id: data-pipeline-builder
+name: 数据管道构建师
+version: 2.1.0
+source: clawhub                        # native | clawhub | evomap | custom
+clawhub_slug: data-pipeline-builder    # ClaWHub 标识符
+capabilities: [python, etl, sql, spark, airflow]
+constraints:
+  deny: [expose-credentials, write-production-db-without-approval]
+mcp_servers:                           # 此 Skill 依赖的 MCP servers
+  - postgres
+  - filesystem
+evomap_genome: "gep://evomap.ai/genomes/data-eng-v3"  # EvoMap GEP 来源
+---
+
+## 角色定位
+你是一位数据工程专家，擅长构建高可靠的数据处理管道...
+```
+
+---
+
+### 13.3 ClaWHub 接入
+
+#### 接入架构
+
+ClaWHub 是 OpenClaw 的官方公共 Skill 注册表（`clawhub.ai`），AIFutureCity 通过两条路径接入：
+
+**路径 1：通过 OpenClaw 间接接入**
+
+当 AI 助手基于 OpenClaw 运行时，平台直接调用 OpenClaw 的 Skills RPC 方法安装 ClaWHub Skill：
+
+```typescript
+// packages/openclaw-adapter/src/skill-sync.ts
+
+export class ClawhubSkillSync {
+  constructor(private adapter: OpenClawAdapter) {}
+
+  // 在 AIFutureCity 前端搜索 ClaWHub Skill，下发到 OpenClaw 安装
+  async installSkill(slug: string): Promise<void> {
+    // 通过 OpenClaw RPC 触发 clawhub install
+    await this.adapter.request("skills.install", { skill: slug });
+  }
+
+  // 同步 OpenClaw 已安装的 ClaWHub Skill 列表到 AIFutureCity
+  async syncInstalled(): Promise<InstalledSkill[]> {
+    const status = await this.adapter.request("skills.status", {});
+    return status.installed.map(mapToAifcSkill);
+  }
+
+  // 将 AIFutureCity 平台 Skill 发布到 ClaWHub
+  async publishSkill(skillPath: string, slug: string, version: string): Promise<void> {
+    await this.adapter.request("skills.install", {
+      action: "publish",
+      path: skillPath,
+      slug,
+      version,
+    });
+  }
+}
+```
+
+**路径 2：ClaWHub API 直接桥接**
+
+AIFutureCity 平台直接调用 ClaWHub API，在前端展示 Skill 市场（无需 OpenClaw 实例在线）：
+
+```typescript
+// apps/gateway/src/skills/clawhub-bridge.ts
+
+export class ClawhubBridge {
+  private readonly baseUrl = "https://clawhub.com";
+
+  // 搜索 ClaWHub 上的公开 Skills（向量语义搜索）
+  async search(query: string, limit = 20): Promise<ClawhubSkill[]> {
+    const res = await fetch(`${this.baseUrl}/api/skills/search?q=${encodeURIComponent(query)}&limit=${limit}`);
+    return res.json();
+  }
+
+  // 获取 Skill 详情（含 SKILL.md 内容 + 版本历史 + 下载量）
+  async getSkill(slug: string): Promise<ClawhubSkillDetail> {
+    const res = await fetch(`${this.baseUrl}/api/skills/${slug}`);
+    return res.json();
+  }
+
+  // 获取 AIFutureCity 官方精选 Skill 列表
+  async getFeatured(): Promise<ClawhubSkill[]> {
+    return this.search("aifuturecity featured");
+  }
+}
+```
+
+#### 前端 ClaWHub Skill 市场页面（`/dashboard/assistants/skills`）
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│  Skill 市场                          [已安装 12]  [发布我的 Skill]  │
+│                                                                  │
+│  [搜索 Skill...]              来源: ● 全部  ○ 平台内置  ○ ClaWHub  │
+│                                      ○ EvoMap  ○ 我的私有          │
+│                                                                  │
+│  🔥 热门                                                          │
+│  ┌──────────────┐ ┌──────────────┐ ┌──────────────┐            │
+│  │ Capability   │ │ Full-Stack   │ │ Data Pipeline│            │
+│  │ Evolver      │ │ Engineer     │ │ Builder      │            │
+│  │ EvoMap       │ │ ClaWHub      │ │ ClaWHub      │            │
+│  │ ★4.9 35k↓   │ │ ★4.8 12k↓   │ │ ★4.7 8k↓    │            │
+│  │ [已安装 ✓]   │ │ [安装]       │ │ [安装]       │            │
+│  └──────────────┘ └──────────────┘ └──────────────┘            │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 13.4 MCP 生态接入
+
+#### MCP 是什么
+
+MCP（Model Context Protocol）是 Anthropic 的开放标准，让 AI 助手通过统一接口连接外部数据源和工具（GitHub、Slack、PostgreSQL、Google Drive 等）。OpenClaw 通过 `mcporter`（独立 npm 包）桥接 MCP servers。
+
+#### AIFutureCity MCP 接入架构
+
+```mermaid
+flowchart LR
+    subgraph aifc_tool [AIFutureCity 工具注册表]
+        TOOL_REG[Tool Registry]
+        MCP_ADAPTER[MCP 工具适配器]
+    end
+
+    subgraph oc_instance [OpenClaw 实例]
+        MCPORTER[mcporter 守护进程]
+        MCP_SKILL[mcporter Skill]
+    end
+
+    subgraph mcp_servers [MCP Servers]
+        S1[github MCP\n仓库 / PR / Issues]
+        S2[postgres MCP\n数据库查询]
+        S3[slack MCP\n消息 / 频道]
+        S4[filesystem MCP\n文件读写]
+        S5[google-drive MCP\n文档 / 表格]
+        S6[custom MCP\n自定义服务器]
+    end
+
+    MCP_SERVERS --> MCPORTER
+    MCPORTER -->|工具列表暴露| MCP_SKILL
+    MCP_SKILL -->|skills.bins 同步| MCP_ADAPTER
+    MCP_ADAPTER --> TOOL_REG
+    TOOL_REG -->|协作工作区可用| aifc_tool
+```
+
+
+
+#### MCP Server 商店（前端页面 `/dashboard/assistants/tools/mcp`）
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│  MCP Server 商店                      [已接入 3 个 MCP Servers]   │
+│                                                                  │
+│  通过 mcporter 一键接入任意 MCP Server 作为 AI 助手工具            │
+│                                                                  │
+│  官方精选                                                         │
+│  ┌────────────┐ ┌────────────┐ ┌────────────┐ ┌────────────┐   │
+│  │ GitHub     │ │ PostgreSQL │ │ Slack      │ │ Filesystem │   │
+│  │ 代码 & PR  │ │ 数据库查询 │ │ 消息协作   │ │ 文件读写   │   │
+│  │ [已接入 ✓] │ │ [接入]     │ │ [接入]     │ │ [已接入 ✓] │   │
+│  └────────────┘ └────────────┘ └────────────┘ └────────────┘   │
+│                                                                  │
+│  [+ 添加自定义 MCP Server]                                        │
+│  Server URL 或 stdio 命令: [________________________]            │
+│  [安装并测试连接]                                                  │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+#### MCP 工具接入代码
+
+```typescript
+// packages/openclaw-adapter/src/mcp-sync.ts
+
+export class McpToolSync {
+  constructor(private adapter: OpenClawAdapter) {}
+
+  // 获取 OpenClaw 实例上所有已接入的 MCP 工具
+  async listMcpTools(): Promise<McpTool[]> {
+    // mcporter 守护进程将 MCP server 工具暴露为 OpenClaw tool
+    const bins = await this.adapter.request("skills.bins", {});
+    return bins
+      .filter((b: any) => b.source === "mcporter")
+      .map(mapMcporterBinToTool);
+  }
+
+  // 安装新的 MCP Server（通过 mcporter CLI）
+  async installMcpServer(serverName: string, config?: Record<string, unknown>): Promise<void> {
+    // 触发 OpenClaw 内部执行：mcporter config add <serverName>
+    await this.adapter.request("tools.invoke", {
+      tool: "mcporter",
+      action: "config-add",
+      args: { server: serverName, config },
+    });
+  }
+
+  // 直接调用 MCP 工具（绕过 agent，供平台内部使用）
+  async invokeMcpTool(server: string, tool: string, args: Record<string, unknown>): Promise<unknown> {
+    return this.adapter.request("tools.invoke", {
+      tool: `${server}.${tool}`,   // mcporter 工具命名格式：server.tool
+      args,
+    });
+  }
+}
+```
+
+#### MCP 工具在协作工作区中的使用
+
+任务协作中，AI 助手可直接调用已接入的 MCP 工具：
+
+```
+[协作工作区 - 工具调用日志]
+
+asst_pc_001 (Executor) → 调用工具: github.create_pull_request
+  input:  { repo: "ai-future-city", title: "feat: add task marketplace", base: "main" }
+  output: { pr_url: "https://github.com/.../pull/42", pr_number: 42 }
+  耗时: 1.2s
+
+asst_rpi_001 (Critic) → 调用工具: postgres.query
+  input:  { query: "SELECT COUNT(*) FROM collaboration_logs WHERE workspace_id = $1" }
+  output: { rows: [{ count: 1847 }] }
+  耗时: 0.3s
+```
+
+---
+
+### 13.5 EvoMap 生态接入
+
+#### EvoMap 是什么
+
+EvoMap（`evomap.ai`）是独立的 **AI 自进化基础设施**，核心是 **Genome Evolution Protocol（GEP）**——受生物遗传学启发，允许 AI 助手在不同模型和部署环境间共享、验证和继承经验能力，无需从零开始。
+
+其核心组件 **Capability Evolver** 已是 ClaWHub 下载量第一的 Skill（35,581 次），AIFutureCity 可通过 ClaWHub 直接安装到 OpenClaw 实例。
+
+#### AIFutureCity × EvoMap 能力映射
+
+
+| EvoMap 概念                          | AIFutureCity 对应        | 整合方式                                       |
+| ---------------------------------- | ---------------------- | ------------------------------------------ |
+| Genome Evolution Protocol（GEP）     | 进化引擎（Evolution Engine） | 用 GEP 标准格式存储协作经验，向量化时附加 genome 元数据         |
+| Capability Evolver Skill           | Skill 市场（ClaWHub 接入）   | 用户一键安装到 OpenClaw，AI 助手自动使用                 |
+| Agent Capability Marketplace       | AIFutureCity 工具市场      | 双向同步：平台工具发布到 EvoMap，EvoMap 能力导入平台          |
+| Evolution Sandbox                  | Docker 协作沙箱            | EvoMap 进化结果先在 Docker 沙箱验证，通过后推广到全平台        |
+| Cross-model Capability Inheritance | 经验 Lock-in 机制          | 助手下架后，经验留存平台，通过 GEP 格式被其他助手继承              |
+| Community Bounty System            | 任务市场                   | EvoMap 的 bounty 与 AIFutureCity 任务的里程碑奖励可互通 |
+
+
+#### EvoMap GEP 进化流程整合
+
+```mermaid
+sequenceDiagram
+    participant COLLAB as 协作工作区
+    participant EVO as 进化引擎
+    participant GEP as EvoMap GEP 协议
+    participant WV as Weaviate 经验库
+    participant SANDBOX as Evolution Sandbox
+
+    COLLAB->>EVO: 任务完成，提交协作 JSONL
+    EVO->>EVO: LLM 摘要提炼 → 关键决策 + 踩坑
+    EVO->>GEP: 封装为 GEP Genome\n{ capabilities[], strategies[], pitfalls[] }
+    GEP->>WV: 存储 GEP Genome（附向量 embedding）
+    GEP->>SANDBOX: 提交新能力到 Evolution Sandbox 验证
+
+    Note over SANDBOX: 隔离环境测试\n新能力是否通用可靠
+
+    SANDBOX-->>EVO: 验证通过
+    EVO->>GEP: 发布到 EvoMap Capability Marketplace
+    Note over GEP: 其他 AI 助手可\n继承此进化能力
+```
+
+
+
+#### GEP Genome 数据结构
+
+```typescript
+// packages/shared/src/types/gep.ts
+
+interface GepGenome {
+  id: string;                          // gep://evomap.ai/genomes/<id>
+  version: string;                     // semver
+  source: {
+    taskType: string;
+    taskTags: string[];
+    platformOrigin: "aifuturecity";
+    workspaceId: string;               // 溯源到原始协作空间
+  };
+  capabilities: {
+    name: string;
+    description: string;
+    requiredSkills: string[];
+    requiredTools: string[];
+    successRate: number;
+  }[];
+  strategies: {
+    phase: "planning" | "execution" | "review";
+    pattern: string;                   // 可复用的协作模式描述
+    conditions: string[];              // 何时应用此策略
+  }[];
+  pitfalls: {
+    description: string;
+    avoidance: string;
+    severity: "low" | "medium" | "high";
+  }[];
+  evolution: {
+    strategy: "balanced" | "innovate" | "harden" | "repair-only";
+    parentGenomeId?: string;           // 从哪个 Genome 进化而来
+    generationNumber: number;
+  };
+  metadata: {
+    createdAt: string;
+    successCount: number;
+    inheritedByCount: number;          // 被多少个助手继承
+    isPublished: boolean;              // 是否发布到 EvoMap Marketplace
+  };
+}
+```
+
+#### Capability Evolver Skill 安装
+
+当用户接入 OpenClaw 实例时，平台推荐安装 ClaWHub #1 Skill：
+
+```typescript
+// apps/gateway/src/evolution/capability-evolver.ts
+
+export async function recommendCapabilityEvolver(
+  adapter: OpenClawAdapter
+): Promise<void> {
+  const installed = await adapter.request("skills.status", {});
+  const hasEvolver = installed.installed.some((s: any) => s.slug === "capability-evolver");
+
+  if (!hasEvolver) {
+    // 在 AIFutureCity 前端推送建议通知
+    await notifyUser({
+      type: "skill_recommendation",
+      title: "推荐安装 Capability Evolver",
+      body: "EvoMap 的 Capability Evolver 是 ClaWHub 下载量第一的 Skill，可显著提升您的 AI 助手自进化能力",
+      action: { label: "一键安装", method: "skills.install", params: { skill: "capability-evolver" } }
+    });
+  }
+}
+```
+
+---
+
+### 13.6 工具注册表（Tool Registry）四维分类
+
+整合三大生态后，AIFutureCity 工具注册表扩展为四维分类体系：
+
+```mermaid
+mindmap
+    root((AIFutureCity\n工具注册表))
+        平台内置工具
+            web_search
+            code_exec 沙箱
+            image_analyze
+            blockchain_query
+            knowledge_search RAG
+            spawn_subagent
+            file_read_write
+        设备原生工具 DevicePlugin
+            PC bash GPU调用
+            树莓派 GPIO 传感器
+            摄像头 视频流
+            车载 OBD 导航
+            OpenClaw 已注册工具
+        MCP Server 工具 via mcporter
+            GitHub PR Issues
+            PostgreSQL 查询
+            Slack 消息
+            Google Drive 文档
+            Filesystem 文件
+            自定义 MCP Server
+        社区生态工具
+            ClaWHub Skills
+            EvoMap 进化能力
+            第三方 npm 插件
+            用户自定义 JSON Schema
+```
+
+
+
+#### 工具注册表数据结构扩展
+
+```typescript
+// packages/tool-registry/src/types.ts（更新）
+
+type ToolSource =
+  | { type: "platform" }
+  | { type: "device"; deviceId: string; pluginId: string }
+  | { type: "mcp"; serverName: string; mcporterVersion: string }
+  | { type: "clawhub"; slug: string; version: string }
+  | { type: "evomap"; genomeId: string; inheritedFrom?: string }
+  | { type: "custom"; userId: string };
+
+interface ToolDefinition {
+  id: string;
+  name: string;
+  description: string;
+  inputSchema: JSONSchema;
+  outputSchema: JSONSchema;
+  category: "compute" | "data" | "communication" | "blockchain" | "vision" | "evolution" | "custom";
+  source: ToolSource;
+  requiresApproval?: boolean;
+  mcpServerConfig?: {                // MCP 工具专属：安装配置
+    installCommand: string;          // npm install @modelcontextprotocol/server-github
+    configSchema: JSONSchema;
+  };
+  clawhubMeta?: {                    // ClaWHub 工具专属
+    downloadCount: number;
+    rating: number;
+    author: string;
+  };
+  evomapMeta?: {                     // EvoMap 工具专属
+    genomeVersion: string;
+    evolutionStrategy: string;
+    successRate: number;
+  };
+}
+```
+
+---
+
+### 13.7 Monorepo 目录结构补充
+
+在现有结构基础上新增生态接入相关目录：
+
+```
+ai-future-city/
+├── packages/
+│   ├── openclaw-adapter/          # 已有：OpenClaw 协议适配器
+│   ├── tool-registry/             # 更新：扩展四维工具分类
+│   │   ├── src/
+│   │   │   ├── registry.ts        # 工具注册表核心
+│   │   │   ├── mcp-adapter.ts     # MCP 工具适配（mcporter 桥接）
+│   │   │   ├── clawhub-bridge.ts  # ClaWHub API 桥接
+│   │   │   └── evomap-bridge.ts   # EvoMap GEP 协议适配
+│   │   └── package.json
+│   │
+│   └── shared/
+│       └── src/types/
+│           ├── gep.ts             # 新增：GEP Genome 类型定义
+│           └── mcp.ts             # 新增：MCP Server/Tool 类型定义
+│
+├── apps/
+│   ├── web/
+│   │   └── app/
+│   │       └── dashboard/
+│   │           └── assistants/
+│   │               ├── skills/    # 新增：Skill 市场页（ClaWHub + EvoMap + 平台内置）
+│   │               └── tools/
+│   │                   └── mcp/   # 新增：MCP Server 商店页
+│   │
+│   └── gateway/
+│       └── src/
+│           ├── skills/
+│           │   ├── clawhub-bridge.ts  # 新增：ClaWHub API 桥接
+│           │   └── skill-sync.ts      # 新增：Skills 同步服务
+│           ├── evolution/
+│           │   ├── gep-encoder.ts     # 新增：协作经验 → GEP Genome 编码
+│           │   ├── evomap-client.ts   # 新增：EvoMap API 客户端
+│           │   └── capability-evolver.ts # 新增：Capability Evolver 推荐
+│           └── tools/
+│               ├── mcp-sync.ts        # 新增：MCP 工具同步
+│               └── registry.ts        # 更新：支持四维来源
+│
+├── skills/                            # 更新：平台内置 + 生态桥接 Skills
+│   ├── software-engineer.md           # 平台内置
+│   ├── data-analyst.md
+│   ├── clawhub.md                     # 新增：ClaWHub CLI 操作 Skill（移植自 OpenClaw）
+│   ├── mcporter.md                    # 新增：MCP 工具调用 Skill（移植自 OpenClaw）
+│   └── capability-evolver.md          # 新增：EvoMap 进化 Skill（通过 ClaWHub 安装）
+│
+└── docs/
+    ├── ecosystem/                     # 新增：生态接入文档
+    │   ├── clawhub.md                 # ClaWHub 接入指南
+    │   ├── mcp.md                     # MCP Server 接入指南
+    │   ├── evomap.md                  # EvoMap GEP 接入指南
+    │   └── tools.md                   # 工具注册表开发指南
+    └── sdk.md
+```
+
+---
+
+### 13.8 Phase 4 生态建设详细计划
+
+**ClaWHub 集成（第 1-2 周）**
+
+- 实现 `packages/tool-registry/src/clawhub-bridge.ts`（搜索、安装、发布 API）
+- 前端 Skill 市场页（`/dashboard/assistants/skills`）
+- 将平台内置 Skills 发布到 ClaWHub（`clawhub publish`）
+- 实现 ClaWHub 徽章展示（下载量、评分、版本）
+
+**MCP Server 商店（第 2-3 周）**
+
+- 实现 `packages/openclaw-adapter/src/mcp-sync.ts`
+- 前端 MCP Server 商店页（`/dashboard/assistants/tools/mcp`）
+- 官方精选 MCP Server 列表（GitHub、PostgreSQL、Slack、Filesystem）
+- 自定义 MCP Server 添加流程（URL 或 stdio 命令配置）
+- 实现 `mcporter config add` 的 UI 封装
+
+**EvoMap GEP 接入（第 3-5 周）**
+
+- 实现 `packages/shared/src/types/gep.ts` GEP 数据结构
+- 进化引擎输出 → GEP Genome 编码（`apps/gateway/src/evolution/gep-encoder.ts`）
+- Evolution Sandbox 集成（协作经验在 EvoMap 沙箱验证后发布）
+- Capability Evolver Skill 安装推荐流程
+- EvoMap Capability Marketplace 双向同步
+
+**工具市场开放（第 5-8 周）**
+
+- 工具注册表四维分类完整实现
+- 第三方工具发布 & 审核流程（提交 JSON Schema + 安全扫描）
+- 工具使用量统计 & 排行榜（InfluxDB 数据源）
+- 生态合作文档（给 ClaWHub / EvoMap / MCP 社区的集成指南）
 
