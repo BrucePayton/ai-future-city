@@ -1,0 +1,12 @@
+{
+  "name": "aifc-client",
+  "private": true,
+  "scripts": {
+    "dev:agent-sdk": "pnpm --filter @aifc/client-agent-sdk dev",
+    "build:agent-sdk": "pnpm --filter @aifc/client-agent-sdk build",
+    "typecheck:agent-sdk": "pnpm --filter @aifc/client-agent-sdk typecheck",
+    "test:openclaw:connection": "pnpm --filter @aifc/client-openclaw-adapter test:connection",
+    "test:openclaw:openai": "pnpm --filter @aifc/client-openclaw-adapter test:openai",
+    "build:openclaw-extension": "pnpm --filter @aifc/client-openclaw-aifuturecity-plugin build"
+  }
+}

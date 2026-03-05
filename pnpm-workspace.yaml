@@ -1,0 +1,11 @@
+packages:
+  - "backend/gateway"
+  - "client/agent-sdk"
+  - "client/openclaw-adapter"
+  - "client/extensions/*"
+  - "web/console"
+  - "packages/protocol"
+  - "packages/device-sdk"
+  - "packages/tool-registry"
+  - "packages/shared"
+  - "packages/db"

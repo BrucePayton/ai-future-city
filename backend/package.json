@@ -1,0 +1,12 @@
+{
+  "name": "aifc-backend",
+  "private": true,
+  "scripts": {
+    "dev:gateway": "pnpm --filter @aifc/backend-gateway dev",
+    "start:gateway": "pnpm --filter @aifc/backend-gateway start",
+    "build:gateway": "pnpm --filter @aifc/backend-gateway build",
+    "typecheck:gateway": "pnpm --filter @aifc/backend-gateway typecheck",
+    "dev:knowledge-service": "python3 -m uvicorn --app-dir services/knowledge-service main:app --reload --host 0.0.0.0 --port 8001",
+    "dev:recommendation-service": "python3 -m uvicorn --app-dir services/recommendation-service main:app --reload --host 0.0.0.0 --port 8002"
+  }
+}

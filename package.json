@@ -1,0 +1,20 @@
+{
+  "name": "ai-future-city",
+  "private": true,
+  "packageManager": "pnpm@10.11.0",
+  "scripts": {
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "dev:backend": "pnpm --dir backend run dev:gateway",
+    "dev:web": "pnpm --dir web run dev",
+    "dev:client": "pnpm --dir client run dev:agent-sdk",
+    "test:client:connection": "pnpm --dir client run test:openclaw:connection",
+    "test:client:openai": "pnpm --dir client run test:openclaw:openai"
+  },
+  "devDependencies": {
+    "@types/node": "^25.3.3",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  }
+}

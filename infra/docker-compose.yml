@@ -1,0 +1,5 @@
+services:
+  gateway:
+    image: node:22
+    working_dir: /workspace
+    command: pnpm --filter @aifc/gateway dev

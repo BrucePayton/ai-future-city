@@ -1,0 +1,4 @@
+services:
+  gateway:
+    environment:
+      NODE_ENV: development

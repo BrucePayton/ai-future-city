@@ -1,0 +1,10 @@
+{
+  "name": "aifc-web",
+  "private": true,
+  "scripts": {
+    "dev": "pnpm --filter @aifc/web-console dev",
+    "build": "pnpm --filter @aifc/web-console build",
+    "start": "pnpm --filter @aifc/web-console start",
+    "typecheck": "pnpm --filter @aifc/web-console typecheck"
+  }
+}
