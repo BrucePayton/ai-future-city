@@ -9,14 +9,37 @@ import type { RegisteredDevice } from "../devices/device-manager.js";
 import { getAssistantsList } from "../methods/assistants.js";
 import type { OpenClawGatewayService } from "../openclaw/service.js";
 import type { SessionStore } from "../sessions/session-store.js";
+import type { TrainingProgressStore } from "../training/training-store.js";
+import type { TrainingSessionStore } from "../training/training-session-store.js";
+import {
+  analyzeTask,
+  evaluateChat,
+  executeToolTest,
+  generateTaskChain,
+  getAssistantTools,
+  injectToolHints,
+} from "../training/training-handlers.js";
 
 const ASSISTANT_CONFIG_PATH_RE = /^\/api\/assistants\/([^/]+)\/config$/;
+const ASSISTANT_TOOLS_PATH_RE = /^\/api\/assistants\/([^/]+)\/tools$/;
+const ASSISTANT_TRAINING_CHAT_SEND_RE = /^\/api\/assistants\/([^/]+)\/training\/chat\/send$/;
+const ASSISTANT_TRAINING_CHAT_EVAL_RE = /^\/api\/assistants\/([^/]+)\/training\/chat\/evaluate$/;
+const ASSISTANT_TRAINING_EXEC_TEST_RE = /^\/api\/assistants\/([^/]+)\/training\/exec\/test$/;
+const ASSISTANT_TRAINING_EXEC_INJECT_RE = /^\/api\/assistants\/([^/]+)\/training\/exec\/inject$/;
+const ASSISTANT_TRAINING_TASK_ANALYZE_RE = /^\/api\/assistants\/([^/]+)\/training\/task\/analyze$/;
+const ASSISTANT_TRAINING_TASK_CHAIN_RE = /^\/api\/assistants\/([^/]+)\/training\/task\/chain$/;
+const ASSISTANT_TRAINING_PROGRESS_RE = /^\/api\/assistants\/([^/]+)\/training\/progress$/;
+const ASSISTANT_TASKS_RE = /^\/api\/assistants\/([^/]+)\/tasks$/;
+const ASSISTANT_TRAINING_SESSIONS_RE = /^\/api\/assistants\/([^/]+)\/training\/sessions$/;
+const ASSISTANT_TRAINING_SESSION_RE = /^\/api\/assistants\/([^/]+)\/training\/sessions\/([^/]+)$/;
 
 export function createHttpServer(deps: {
   devices: DeviceManager;
   sessions: SessionStore;
   openClaw: OpenClawGatewayService;
   assistantConfig: AssistantConfigStore;
+  trainingProgress: TrainingProgressStore;
+  trainingSessions: TrainingSessionStore;
 }) {
   return http.createServer((req, res) => {
     setCorsHeaders(res);
@@ -63,7 +86,92 @@ export function createHttpServer(deps: {
       return;
     }
 
-    const configPathMatch = (req.url ?? "").split("?")[0].match(ASSISTANT_CONFIG_PATH_RE);
+    const path = (req.url ?? "").split("?")[0];
+
+    // B3: GET /api/assistants/:id/tools
+    const toolsMatch = path.match(ASSISTANT_TOOLS_PATH_RE);
+    if (toolsMatch && req.method === "GET") {
+      void handleTrainingTools(req, res, toolsMatch[1], deps);
+      return;
+    }
+
+    // TC: POST /api/assistants/:id/training/chat/send
+    const chatSendMatch = path.match(ASSISTANT_TRAINING_CHAT_SEND_RE);
+    if (chatSendMatch && req.method === "POST") {
+      void handleTrainingChatSend(req, res, chatSendMatch[1], deps);
+      return;
+    }
+
+    // B1: POST /api/assistants/:id/training/chat/evaluate
+    const chatEvalMatch = path.match(ASSISTANT_TRAINING_CHAT_EVAL_RE);
+    if (chatEvalMatch && req.method === "POST") {
+      void handleChatEvaluate(req, res, chatEvalMatch[1], deps);
+      return;
+    }
+
+    // B4: POST /api/assistants/:id/training/exec/test
+    const execTestMatch = path.match(ASSISTANT_TRAINING_EXEC_TEST_RE);
+    if (execTestMatch && req.method === "POST") {
+      void handleExecTest(req, res, execTestMatch[1], deps);
+      return;
+    }
+
+    // B5: POST /api/assistants/:id/training/exec/inject
+    const execInjectMatch = path.match(ASSISTANT_TRAINING_EXEC_INJECT_RE);
+    if (execInjectMatch && req.method === "POST") {
+      void handleExecInject(req, res, execInjectMatch[1], deps);
+      return;
+    }
+
+    // B7: POST /api/assistants/:id/training/task/analyze
+    const taskAnalyzeMatch = path.match(ASSISTANT_TRAINING_TASK_ANALYZE_RE);
+    if (taskAnalyzeMatch && req.method === "POST") {
+      void handleTaskAnalyze(req, res, taskAnalyzeMatch[1], deps);
+      return;
+    }
+
+    // B8: POST /api/assistants/:id/training/task/chain
+    const taskChainMatch = path.match(ASSISTANT_TRAINING_TASK_CHAIN_RE);
+    if (taskChainMatch && req.method === "POST") {
+      void handleTaskChain(req, res, taskChainMatch[1], deps);
+      return;
+    }
+
+    // B10: GET/POST /api/assistants/:id/training/progress
+    const progressMatch = path.match(ASSISTANT_TRAINING_PROGRESS_RE);
+    if (progressMatch) {
+      if (req.method === "GET") {
+        void handleGetTrainingProgress(req, res, progressMatch[1], deps);
+        return;
+      }
+      if (req.method === "POST") {
+        void handlePostTrainingProgress(req, res, progressMatch[1], deps);
+        return;
+      }
+    }
+
+    // B9: GET /api/assistants/:id/tasks
+    const tasksMatch = path.match(ASSISTANT_TASKS_RE);
+    if (tasksMatch && req.method === "GET") {
+      void handleAssistantTasks(req, res, tasksMatch[1], deps);
+      return;
+    }
+
+    // B11: POST /api/assistants/:id/training/sessions
+    const sessionsMatch = path.match(ASSISTANT_TRAINING_SESSIONS_RE);
+    if (sessionsMatch && req.method === "POST") {
+      void handleCreateTrainingSession(req, res, sessionsMatch[1], deps);
+      return;
+    }
+
+    // B11: GET /api/assistants/:id/training/sessions/:sessionId
+    const sessionMatch = path.match(ASSISTANT_TRAINING_SESSION_RE);
+    if (sessionMatch && req.method === "GET") {
+      void handleGetTrainingSession(req, res, sessionMatch[1], sessionMatch[2], deps);
+      return;
+    }
+
+    const configPathMatch = path.match(ASSISTANT_CONFIG_PATH_RE);
     if (configPathMatch) {
       const assistantId = configPathMatch[1];
       if (req.method === "GET") {
@@ -76,8 +184,7 @@ export function createHttpServer(deps: {
       }
     }
 
-    res.writeHead(404, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ ok: false, message: "Not Found" }));
+    writeError(res, 404, "Not Found", "NOT_FOUND");
   });
 }
 
@@ -91,13 +198,10 @@ async function respondJson(
     res.writeHead(statusCode, { "Content-Type": "application/json" });
     res.end(JSON.stringify(payload));
   } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error("[gateway] 500 error:", msg);
     res.writeHead(500, { "Content-Type": "application/json" });
-    res.end(
-      JSON.stringify({
-        ok: false,
-        error: error instanceof Error ? error.message : String(error),
-      }),
-    );
+    res.end(JSON.stringify({ ok: false, error: "服务暂时不可用，请稍后重试" }));
   }
 }
 
@@ -105,6 +209,28 @@ function setCorsHeaders(res: http.ServerResponse): void {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,PATCH,OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+}
+
+/** Unified error response: { ok: false, error: string, code?: string }.
+ *  5xx: generic user message, actual error logged separately. */
+function writeError(
+  res: http.ServerResponse,
+  statusCode: number,
+  error: string,
+  code?: string,
+): void {
+  setCorsHeaders(res);
+  if (statusCode >= 500) {
+    console.error(`[gateway] ${statusCode} error:`, error);
+    error = "服务暂时不可用，请稍后重试";
+  }
+  const payload: { ok: false; error: string; code?: string } = {
+    ok: false,
+    error,
+    ...(code ? { code } : {}),
+  };
+  res.writeHead(statusCode, { "Content-Type": "application/json" });
+  res.end(JSON.stringify(payload));
 }
 
 type RegisterBody = { id: string; name?: string; kind?: RegisteredDevice["kind"] };
@@ -120,13 +246,11 @@ async function handleRegisterAssistant(
     const raw = await readRequestBody(req);
     body = JSON.parse(raw) as RegisterBody;
   } catch {
-    res.writeHead(400, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ ok: false, error: "Invalid JSON body" }));
+    writeError(res, 400, "Invalid JSON body", "INVALID_BODY");
     return;
   }
   if (!body?.id || typeof body.id !== "string") {
-    res.writeHead(400, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ ok: false, error: "Missing or invalid body.id" }));
+    writeError(res, 400, "Missing or invalid body.id", "INVALID_BODY");
     return;
   }
   const kind = body.kind === "pc" || body.kind === "sdk" || body.kind === "custom" ? body.kind : "pc";
@@ -152,8 +276,11 @@ function readRequestBody(req: http.IncomingMessage): Promise<string> {
 
 type AssistantConfigDeps = {
   devices: DeviceManager;
+  sessions: SessionStore;
   openClaw: OpenClawGatewayService;
   assistantConfig: AssistantConfigStore;
+  trainingProgress: TrainingProgressStore;
+  trainingSessions: TrainingSessionStore;
 };
 
 async function resolveAssistantById(
@@ -168,6 +295,37 @@ async function resolveAssistantById(
   return found ? { id: found.id, name: found.name } : null;
 }
 
+async function resolveAssistantWithProvider(
+  deps: AssistantConfigDeps,
+  id: string,
+): Promise<{ id: string; name: string; provider: string } | null> {
+  const { assistants } = await getAssistantsList({
+    devices: deps.devices,
+    openClaw: deps.openClaw,
+  });
+  const found = assistants.find((a) => a.id === id);
+  return found ? { id: found.id, name: found.name, provider: found.provider } : null;
+}
+
+function extractChatContent(message: unknown): string {
+  if (typeof message === "string") return message;
+  if (!message || typeof message !== "object") return "";
+  const obj = message as { content?: unknown; text?: unknown };
+  if (typeof obj.text === "string") return obj.text;
+  const content = obj.content;
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((entry) => {
+        if (!entry || typeof entry !== "object") return "";
+        const typed = entry as { type?: unknown; text?: unknown };
+        return typed.type === "text" && typeof typed.text === "string" ? typed.text : "";
+      })
+      .join("");
+  }
+  return "";
+}
+
 async function handleGetAssistantConfig(
   _req: http.IncomingMessage,
   res: http.ServerResponse,
@@ -177,8 +335,7 @@ async function handleGetAssistantConfig(
   setCorsHeaders(res);
   const assistant = await resolveAssistantById(deps, assistantId);
   if (!assistant) {
-    res.writeHead(404, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ ok: false, error: "Assistant not found" }));
+    writeError(res, 404, "Assistant not found", "ASSISTANT_NOT_FOUND");
     return;
   }
   const config = deps.assistantConfig.getOrDefault(assistant.id, assistant.name);
@@ -195,8 +352,7 @@ async function handlePatchAssistantConfig(
   setCorsHeaders(res);
   const assistant = await resolveAssistantById(deps, assistantId);
   if (!assistant) {
-    res.writeHead(404, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ ok: false, error: "Assistant not found" }));
+    writeError(res, 404, "Assistant not found", "ASSISTANT_NOT_FOUND");
     return;
   }
   let body: AssistantConfigPayload;
@@ -204,11 +360,401 @@ async function handlePatchAssistantConfig(
     const raw = await readRequestBody(req);
     body = JSON.parse(raw) as AssistantConfigPayload;
   } catch {
-    res.writeHead(400, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ ok: false, error: "Invalid JSON body" }));
+    writeError(res, 400, "Invalid JSON body", "INVALID_BODY");
     return;
   }
   deps.assistantConfig.update(assistant.id, assistant.name, body);
   res.writeHead(200, { "Content-Type": "application/json" });
   res.end(JSON.stringify({ ok: true, id: assistant.id }));
+}
+
+// --- Training handlers ---
+
+async function handleTrainingChatSend(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  assistantId: string,
+  deps: AssistantConfigDeps,
+): Promise<void> {
+  setCorsHeaders(res);
+  const assistant = await resolveAssistantWithProvider(deps, assistantId);
+  if (!assistant) {
+    writeError(res, 404, "Assistant not found", "ASSISTANT_NOT_FOUND");
+    return;
+  }
+  if (assistant.provider !== "openclaw") {
+    writeError(res, 501, "Training chat is only supported for OpenClaw assistants", "NOT_OPENCLAW_ASSISTANT");
+    return;
+  }
+  if (!deps.openClaw.isEnabled()) {
+    const status = await deps.openClaw.getStatus();
+    writeError(
+      res,
+      503,
+      status.connected ? "OpenClaw unavailable" : "OpenClaw not connected",
+      "OPENCLAW_NOT_AVAILABLE",
+    );
+    return;
+  }
+  let body: { message?: string; sessionKey?: string };
+  try {
+    const raw = await readRequestBody(req);
+    body = JSON.parse(raw) as typeof body;
+  } catch {
+    writeError(res, 400, "Invalid JSON body", "INVALID_BODY");
+    return;
+  }
+  const message = typeof body?.message === "string" ? body.message : "";
+  if (!message.trim()) {
+    writeError(res, 400, "Missing or empty message", "INVALID_BODY");
+    return;
+  }
+  const sessionKey =
+    typeof body?.sessionKey === "string" && body.sessionKey
+      ? body.sessionKey
+      : `training-${assistant.id}`;
+
+  res.setTimeout(65_000, () => {
+    if (!res.writableEnded) {
+      res.destroy();
+    }
+  });
+
+  try {
+    console.log("[training/chat/send] start", { assistantId, sessionKey, messageLen: message.length });
+    const rawMessage = await deps.openClaw.sendChat({
+      sessionKey,
+      message,
+      idempotencyKey: undefined,
+    });
+    const content = extractChatContent(rawMessage);
+    console.log("[training/chat/send] ok", { assistantId, contentLen: String(content).length });
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ role: "assistant", content }));
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "OpenClaw chat failed";
+    console.warn("[training/chat/send] failed", { assistantId, sessionKey, error: msg });
+    writeError(res, 502, msg, "OPENCLAW_CHAT_FAILED");
+  }
+}
+
+async function handleTrainingTools(
+  _req: http.IncomingMessage,
+  res: http.ServerResponse,
+  assistantId: string,
+  deps: AssistantConfigDeps,
+): Promise<void> {
+  setCorsHeaders(res);
+  const assistant = await resolveAssistantById(deps, assistantId);
+  if (!assistant) {
+    writeError(res, 404, "Assistant not found", "ASSISTANT_NOT_FOUND");
+    return;
+  }
+  const tools = getAssistantTools(assistant.id, deps.assistantConfig);
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify(tools));
+}
+
+async function handleChatEvaluate(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  assistantId: string,
+  deps: AssistantConfigDeps,
+): Promise<void> {
+  setCorsHeaders(res);
+  const assistant = await resolveAssistantById(deps, assistantId);
+  if (!assistant) {
+    writeError(res, 404, "Assistant not found", "ASSISTANT_NOT_FOUND");
+    return;
+  }
+  let body: { messages?: Array<{ role: string; content: string }>; testPrompt?: string };
+  try {
+    const raw = await readRequestBody(req);
+    body = JSON.parse(raw) as typeof body;
+  } catch {
+    writeError(res, 400, "Invalid JSON body", "INVALID_BODY");
+    return;
+  }
+  let messages = body.messages ?? [];
+  const testPrompt = typeof body.testPrompt === "string" ? body.testPrompt.trim() : "";
+  if (testPrompt && deps.openClaw.isEnabled()) {
+    const withProvider = await resolveAssistantWithProvider(deps, assistant.id);
+    if (withProvider?.provider === "openclaw") {
+      try {
+        const rawReply = await deps.openClaw.sendChat({
+          sessionKey: `training-${assistant.id}`,
+          message: testPrompt,
+          idempotencyKey: undefined,
+        });
+        const content = extractChatContent(rawReply);
+        messages = [
+          { role: "user", content: testPrompt },
+          { role: "assistant", content },
+        ];
+      } catch {
+        writeError(res, 502, "Failed to get assistant reply", "OPENCLAW_CHAT_FAILED");
+        return;
+      }
+    }
+  }
+  const config = deps.assistantConfig.getOrDefault(assistant.id, assistant.name);
+  const result = evaluateChat(assistant.id, config, { messages });
+  deps.trainingProgress.update(assistant.id, {
+    chat: { score: result.score, lastEvaluatedAt: new Date().toISOString() },
+  });
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify(result));
+}
+
+async function handleExecTest(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  assistantId: string,
+  deps: AssistantConfigDeps,
+): Promise<void> {
+  setCorsHeaders(res);
+  const assistant = await resolveAssistantById(deps, assistantId);
+  if (!assistant) {
+    writeError(res, 404, "Assistant not found", "ASSISTANT_NOT_FOUND");
+    return;
+  }
+  let body: { toolId?: string };
+  try {
+    const raw = await readRequestBody(req);
+    body = JSON.parse(raw) as typeof body;
+  } catch {
+    writeError(res, 400, "Invalid JSON body", "INVALID_BODY");
+    return;
+  }
+  const toolId = typeof body.toolId === "string" ? body.toolId : "";
+  if (!toolId) {
+    writeError(res, 400, "Missing toolId", "INVALID_BODY");
+    return;
+  }
+  const tools = getAssistantTools(assistant.id, deps.assistantConfig);
+  const result = await executeToolTest(toolId, tools);
+  const progress = deps.trainingProgress.getOrDefault(assistant.id);
+  const toolResults = [
+    ...(progress.exec.toolResults ?? []),
+    {
+      toolId: result.toolId,
+      passed: result.passed,
+      durationMs: result.durationMs,
+      error: result.error ?? undefined,
+    },
+  ];
+  const passed = toolResults.filter((r) => r.passed).length;
+  deps.trainingProgress.update(assistant.id, {
+    exec: { passRate: Math.round((passed / toolResults.length) * 100), toolResults },
+  });
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify(result));
+}
+
+async function handleExecInject(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  assistantId: string,
+  deps: AssistantConfigDeps,
+): Promise<void> {
+  setCorsHeaders(res);
+  const assistant = await resolveAssistantById(deps, assistantId);
+  if (!assistant) {
+    writeError(res, 404, "Assistant not found", "ASSISTANT_NOT_FOUND");
+    return;
+  }
+  let body: { toolId?: string; schema?: string; examples?: string[] };
+  try {
+    const raw = await readRequestBody(req);
+    body = JSON.parse(raw) as typeof body;
+  } catch {
+    writeError(res, 400, "Invalid JSON body", "INVALID_BODY");
+    return;
+  }
+  if (!body?.toolId || typeof body.toolId !== "string") {
+    writeError(res, 400, "Missing toolId", "INVALID_BODY");
+    return;
+  }
+  injectToolHints(assistant.id, { toolId: body.toolId, schema: body.schema, examples: body.examples });
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ ok: true }));
+}
+
+async function handleTaskAnalyze(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  assistantId: string,
+  deps: AssistantConfigDeps,
+): Promise<void> {
+  setCorsHeaders(res);
+  const assistant = await resolveAssistantById(deps, assistantId);
+  if (!assistant) {
+    writeError(res, 404, "Assistant not found", "ASSISTANT_NOT_FOUND");
+    return;
+  }
+  let body: { taskDescription?: string; taskType?: "dev" | "data" | "audit" };
+  try {
+    const raw = await readRequestBody(req);
+    body = JSON.parse(raw) as typeof body;
+  } catch {
+    writeError(res, 400, "Invalid JSON body", "INVALID_BODY");
+    return;
+  }
+  const result = analyzeTask({
+    taskDescription: body.taskDescription ?? "",
+    taskType: body.taskType,
+  });
+  const progress = deps.trainingProgress.getOrDefault(assistant.id);
+  deps.trainingProgress.update(assistant.id, {
+    task: { analyzedCount: (progress.task.analyzedCount ?? 0) + 1 },
+  });
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify(result));
+}
+
+async function handleTaskChain(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  assistantId: string,
+  deps: AssistantConfigDeps,
+): Promise<void> {
+  setCorsHeaders(res);
+  const assistant = await resolveAssistantById(deps, assistantId);
+  if (!assistant) {
+    writeError(res, 404, "Assistant not found", "ASSISTANT_NOT_FOUND");
+    return;
+  }
+  let body: { taskId?: string; subtasks?: Array<{ id: string; description: string }> };
+  try {
+    const raw = await readRequestBody(req);
+    body = JSON.parse(raw) as typeof body;
+  } catch {
+    writeError(res, 400, "Invalid JSON body", "INVALID_BODY");
+    return;
+  }
+  const tools = getAssistantTools(assistant.id, deps.assistantConfig);
+  const result = generateTaskChain(
+    { taskId: body.taskId, subtasks: body.subtasks ?? [] },
+    tools,
+  );
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify(result));
+}
+
+async function handleGetTrainingProgress(
+  _req: http.IncomingMessage,
+  res: http.ServerResponse,
+  assistantId: string,
+  deps: AssistantConfigDeps,
+): Promise<void> {
+  setCorsHeaders(res);
+  const assistant = await resolveAssistantById(deps, assistantId);
+  if (!assistant) {
+    writeError(res, 404, "Assistant not found", "ASSISTANT_NOT_FOUND");
+    return;
+  }
+  const progress = deps.trainingProgress.getOrDefault(assistant.id);
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(
+    JSON.stringify({
+      chat: progress.chat,
+      exec: progress.exec,
+      task: progress.task,
+    }),
+  );
+}
+
+async function handlePostTrainingProgress(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  assistantId: string,
+  deps: AssistantConfigDeps,
+): Promise<void> {
+  setCorsHeaders(res);
+  const assistant = await resolveAssistantById(deps, assistantId);
+  if (!assistant) {
+    writeError(res, 404, "Assistant not found", "ASSISTANT_NOT_FOUND");
+    return;
+  }
+  let body: { chat?: object; exec?: object; task?: object };
+  try {
+    const raw = await readRequestBody(req);
+    body = JSON.parse(raw) as typeof body;
+  } catch {
+    writeError(res, 400, "Invalid JSON body", "INVALID_BODY");
+    return;
+  }
+  deps.trainingProgress.update(assistant.id, body);
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ ok: true }));
+}
+
+async function handleAssistantTasks(
+  _req: http.IncomingMessage,
+  res: http.ServerResponse,
+  assistantId: string,
+  deps: AssistantConfigDeps,
+): Promise<void> {
+  setCorsHeaders(res);
+  const assistant = await resolveAssistantById(deps, assistantId);
+  if (!assistant) {
+    writeError(res, 404, "Assistant not found", "ASSISTANT_NOT_FOUND");
+    return;
+  }
+  const workspaceSessions = deps.sessions.list();
+  const tasks = workspaceSessions.map((s) => ({
+    id: s.id,
+    title: s.title,
+    description: s.title,
+    status: s.status === "active" ? "in_progress" : "idle",
+  }));
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify(tasks));
+}
+
+async function handleCreateTrainingSession(
+  _req: http.IncomingMessage,
+  res: http.ServerResponse,
+  assistantId: string,
+  deps: AssistantConfigDeps,
+): Promise<void> {
+  setCorsHeaders(res);
+  const assistant = await resolveAssistantById(deps, assistantId);
+  if (!assistant) {
+    writeError(res, 404, "Assistant not found", "ASSISTANT_NOT_FOUND");
+    return;
+  }
+  const record = deps.trainingSessions.create(assistant.id);
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ sessionId: record.id }));
+}
+
+async function handleGetTrainingSession(
+  _req: http.IncomingMessage,
+  res: http.ServerResponse,
+  assistantId: string,
+  sessionId: string,
+  deps: AssistantConfigDeps,
+): Promise<void> {
+  setCorsHeaders(res);
+  const assistant = await resolveAssistantById(deps, assistantId);
+  if (!assistant) {
+    writeError(res, 404, "Assistant not found", "ASSISTANT_NOT_FOUND");
+    return;
+  }
+  const session = deps.trainingSessions.get(sessionId);
+  if (!session || session.assistantId !== assistant.id) {
+    writeError(res, 404, "Training session not found", "SESSION_NOT_FOUND");
+    return;
+  }
+  const progress = deps.trainingProgress.getOrDefault(assistant.id);
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(
+    JSON.stringify({
+      id: session.id,
+      assistantId: session.assistantId,
+      createdAt: session.createdAt,
+      progress: session.progress ?? progress,
+    }),
+  );
 }

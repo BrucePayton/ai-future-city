@@ -170,11 +170,17 @@ export class OpenClawAdapter {
           return;
         }
 
-        const payload = event.payload as ChatEventPayload | undefined;
-        if (!payload || payload.sessionKey !== params.sessionKey) {
+        const rawPayload = event.payload ?? (event as { data?: unknown }).data;
+        const payload = rawPayload as ChatEventPayload | undefined;
+        if (!payload || typeof payload !== "object") {
           return;
         }
 
+        const sessionMatch = payload.sessionKey === params.sessionKey;
+        const runMatch = Boolean(activeRunId && payload.runId && payload.runId === activeRunId);
+        if (!sessionMatch && !runMatch) {
+          return;
+        }
         if (activeRunId && payload.runId && payload.runId !== activeRunId) {
           return;
         }

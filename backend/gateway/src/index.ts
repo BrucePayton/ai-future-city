@@ -2,6 +2,8 @@ import { AssistantConfigStore } from "./assistants/assistant-config.js";
 import { loadLocalEnvFiles } from "./config/load-local-env.js";
 import { loadGatewayEnv } from "./config/env.js";
 import { DeviceManager } from "./devices/device-manager.js";
+import { TrainingProgressStore } from "./training/training-store.js";
+import { TrainingSessionStore } from "./training/training-session-store.js";
 import { InboundOpenClawRegistry } from "./openclaw/inbound-registry.js";
 import { OpenClawGatewayService } from "./openclaw/service.js";
 import { SessionStore } from "./sessions/session-store.js";
@@ -40,12 +42,16 @@ const openClaw = new OpenClawGatewayService({
 });
 
 const assistantConfig = new AssistantConfigStore();
+const trainingProgress = new TrainingProgressStore();
+const trainingSessions = new TrainingSessionStore();
 
 const server = createHttpServer({
   devices,
   sessions,
   openClaw,
   assistantConfig,
+  trainingProgress,
+  trainingSessions,
 });
 attachGatewayWebSocketServer({
   server,

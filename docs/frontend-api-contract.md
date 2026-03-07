@@ -133,6 +133,27 @@
 
 ---
 
+### 训练场 API
+
+训练场相关接口已实现，详见 [backend-training-todo.md](./backend-training-todo.md)。前端工程对接说明见 AIFutureCity-Web 仓库 `docs/training-api-integration.md`。
+
+| 方法/路径 | 说明 |
+|-----------|------|
+| `POST /api/assistants/:id/training/chat/send` | 训练场对话：发送消息并获取助手回复（TC，仅 OpenClaw 助手）。可能需等待较长时间（最多约 60s）；建议前端设置请求超时 ≥65s 并提示「等待回复中…」 |
+| `GET /api/assistants/:id/tools` | 获取助手工具清单（B3） |
+| `POST /api/assistants/:id/training/chat/evaluate` | 聊天能力评估（B1） |
+| `POST /api/assistants/:id/training/exec/test` | 工具测试执行（B4） |
+| `POST /api/assistants/:id/training/exec/inject` | 工具调用灌输（B5） |
+| `POST /api/assistants/:id/training/task/analyze` | 任务理解与拆解（B7） |
+| `POST /api/assistants/:id/training/task/chain` | 工具调用链生成（B8） |
+| `GET /api/assistants/:id/training/progress` | 获取训练进度（B10） |
+| `POST /api/assistants/:id/training/progress` | 更新训练进度（B10） |
+| `GET /api/assistants/:id/tasks` | 助手关联任务列表（B9） |
+| `POST /api/assistants/:id/training/sessions` | 创建训练会话（B11） |
+| `GET /api/assistants/:id/training/sessions/:sessionId` | 获取训练会话详情（B11） |
+
+---
+
 ### GET /api/overview
 
 **用途**：概览（设备列表、会话列表、OpenClaw 状态），可用于调试或概览页。

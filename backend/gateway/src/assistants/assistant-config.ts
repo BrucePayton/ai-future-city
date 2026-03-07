@@ -35,6 +35,8 @@ export type AssistantConfigPayload = {
   tools?: ToolConfigItem[] | Array<{ id: string; requiresApproval?: boolean }>;
   constraints?: ConstraintConfigItem[];
   costControl?: CostControlConfig;
+  /** Chat evaluation pass threshold (0-100), default 80 */
+  chatEvaluatePassThreshold?: number;
 };
 
 export type AssistantConfigFull = {
@@ -44,6 +46,7 @@ export type AssistantConfigFull = {
   tools: ToolConfigItem[];
   constraints: ConstraintConfigItem[];
   costControl: CostControlConfig;
+  chatEvaluatePassThreshold?: number;
 };
 
 const defaultPersona: PersonaConfig = {};
@@ -129,6 +132,10 @@ export class AssistantConfigStore {
         payload.costControl !== undefined
           ? { ...current.costControl, ...payload.costControl }
           : current.costControl,
+      chatEvaluatePassThreshold:
+        payload.chatEvaluatePassThreshold !== undefined
+          ? Math.min(100, Math.max(0, Number(payload.chatEvaluatePassThreshold) || 80))
+          : current.chatEvaluatePassThreshold,
     };
     this.configs.set(id, updated);
     return updated;
