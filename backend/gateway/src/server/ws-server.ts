@@ -28,6 +28,21 @@ export function attachGatewayWebSocketServer(params: {
   });
 
   wss.on("connection", (socket) => {
+    const conn = socket as typeof socket & { _registeredDeviceId?: string };
+    conn.on("close", () => {
+      const deviceId = conn._registeredDeviceId;
+      if (deviceId) {
+        const current = params.devices.get(deviceId);
+        if (current) {
+          params.devices.upsert({
+            ...current,
+            status: "offline",
+            lastSeenAt: Date.now(),
+          });
+        }
+      }
+    });
+
     socket.send(
       JSON.stringify({
         type: "event",
@@ -72,6 +87,22 @@ export function attachGatewayWebSocketServer(params: {
 
       try {
         if (frame.method === "connect") {
+          const paramsConnect = frame.params as { device?: { id: string; kind?: string; name?: string } } | undefined;
+          const deviceInfo = paramsConnect?.device;
+          if (deviceInfo?.id) {
+            const kind = (deviceInfo.kind === "pc" || deviceInfo.kind === "sdk" || deviceInfo.kind === "custom"
+              ? deviceInfo.kind
+              : "pc") as "pc" | "sdk" | "custom";
+            params.devices.upsert({
+              id: deviceInfo.id,
+              kind,
+              status: "online",
+              lastSeenAt: Date.now(),
+              name: deviceInfo.name,
+            });
+            conn._registeredDeviceId = deviceInfo.id;
+          }
+
           socket.send(
             JSON.stringify({
               type: "res",
@@ -87,6 +118,7 @@ export function attachGatewayWebSocketServer(params: {
                     "health",
                     "devices.list",
                     "assistants.list",
+                    "assistants.register",
                     "workspace.list",
                     "workspace.create",
                     "tasks.dispatch",

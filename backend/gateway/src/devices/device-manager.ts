@@ -1,8 +1,10 @@
 export type RegisteredDevice = {
   id: string;
-  kind: "openclaw" | "sdk" | "custom";
+  kind: "openclaw" | "sdk" | "pc" | "custom";
   status: "online" | "offline";
   lastSeenAt: number;
+  /** Optional display name for UI */
+  name?: string;
 };
 
 export class DeviceManager {
@@ -14,8 +16,17 @@ export class DeviceManager {
     }
   }
 
+  get(id: string): RegisteredDevice | undefined {
+    return this.devices.get(id);
+  }
+
   upsert(device: RegisteredDevice): void {
-    this.devices.set(device.id, device);
+    const existing = this.devices.get(device.id);
+    this.devices.set(device.id, {
+      ...existing,
+      ...device,
+      lastSeenAt: device.lastSeenAt ?? Date.now(),
+    });
   }
 
   list(): RegisteredDevice[] {

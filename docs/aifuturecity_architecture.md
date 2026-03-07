@@ -82,7 +82,8 @@ isProject: false
 ```mermaid
 flowchart TB
     subgraph L1 [第一层：交互终端层 Front-End & Edge]
-        WEB[Web/App 宿主门户\nNext.js 14]
+        WEB[主前端 外部\nAIFutureCity-Web Aifuturecity\nVite React]
+        CONSOLE[Dev Console 本仓\nweb/console Next.js]
         SDK[Agent SDK / Connector\n设备端轻量客户端]
         CITY[虚拟城市视图\n2.5D 社交空间]
     end
@@ -150,15 +151,15 @@ flowchart TB
 | 合约交互       | ethers.js v6                                              |
 
 
-### 第一层前端：Web/App 门户（Next.js 14）
+### 第一层前端：Web/App 门户
 
+- **主前端**（外部仓库 **AIFutureCity-Web/Aifuturecity**）：Vite + React，对接本仓 `backend/gateway` 的 HTTP 与 WebSocket RPC；UI 含 MUI、Radix、Tailwind，实时通信通过自定义 WebSocket 客户端（与网关 JSON-RPC 协议一致）。
+- **本仓开发控制台**（`web/console`）：Next.js 14，用于网关健康检查与 WebSocket RPC 调试，可选。
 
-| 用途     | 库                                                   |
+| 用途     | 库（主前端 / 控制台参考）                                   |
 | ------ | --------------------------------------------------- |
-| 框架     | Next.js 14 App Router + TypeScript                  |
-| UI     | Tailwind CSS + shadcn/ui                            |
-| 状态管理   | Zustand                                             |
-| Web3   | wagmi + viem                                        |
+| 框架     | Vite + React / Next.js 14 App Router + TypeScript   |
+| UI     | MUI + Radix + Tailwind / Tailwind + shadcn/ui        |
 | 实时通信   | 自定义 WebSocket 客户端（参考 OpenClaw GatewayBrowserClient） |
 | 图表     | Recharts                                            |
 | 虚拟城市视图 | Three.js / react-three-fiber（2.5D 场景渲染）             |

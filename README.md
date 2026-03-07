@@ -4,11 +4,13 @@ AIFutureCity 是一个围绕 AI 助手、设备接入、协作工作区和平台
 
 ## Current Structure
 
+主 Web 门户为**独立仓库** `AIFutureCity-Web/Aifuturecity`（Vite + React），本仓的 `web/console` 为平台网关的**开发/调试控制台**（可选）。
+
 ```text
 ai-future-city/
 ├── backend/        # 平台后端服务
 ├── client/         # 设备端 / 本地宿主侧能力
-├── web/            # 浏览器前端
+├── web/            # 网关开发/调试控制台（可选）
 ├── packages/       # 跨层共享代码
 ├── infra/          # 基础设施与部署配置
 ├── skills/         # Skill 资源文件
@@ -49,11 +51,11 @@ ai-future-city/
 
 ### `web/`
 
-浏览器端应用。
+网关开发/调试控制台（可选；主前端见独立仓库 AIFutureCity-Web/Aifuturecity）。
 
 - `web/console`
   - Next.js 控制台应用
-  - 直接接入 `backend/gateway` 的 `/healthz` 和 WebSocket RPC
+  - 直接接入 `backend/gateway` 的 `/healthz` 和 WebSocket RPC，用于联调与调试
 
 ### `packages/`
 
@@ -88,20 +90,25 @@ ai-future-city/
 ### From repo root
 
 ```bash
+# 仅启动网关（供外部前端或本仓控制台连接）
+pnpm dev:backend
+
+# 启动网关 + 本仓开发控制台
 pnpm dev:backend
 pnpm dev:web
+
 pnpm dev:client
 ```
 
 ### Start each layer directly
 
 ```bash
-# Backend
+# Backend（仅网关时，外部前端可连接此端口）
 pnpm --dir backend run dev:gateway
 pnpm --dir backend run dev:knowledge-service
 pnpm --dir backend run dev:recommendation-service
 
-# Web
+# Web（本仓调试控制台）
 pnpm --dir web run dev
 
 # Client
@@ -112,13 +119,18 @@ pnpm --dir client run test:openclaw:openai
 
 ## Local OpenClaw Integration
 
-当前仓库已经完成一条本地联调链路：
+当前仓库已完成本地 OpenClaw 联调链路：`backend/gateway` 可连接本地 OpenClaw，`web/console` 与主前端可读取健康检查及 WebSocket RPC，`client/openclaw-adapter` 可单独验证连接。
 
-- `backend/gateway` 可连接本地 OpenClaw
-- `web/console` 可读取 gateway 的健康检查和 WebSocket RPC
-- `client/openclaw-adapter` 可单独验证本地 OpenClaw 的 WebSocket RPC 与 OpenAI REST 接口
+**接入本地 OpenClaw 助手（四步）：**
 
-建议在根目录使用 `.env.local` 配置本地联调参数，例如：
+1. **运行 OpenClaw**：在本机启动 OpenClaw，默认 WebSocket 端口 `18789`（`lsof -i :18789` 确认）。
+2. **获取 Gateway Token**：例如 `cat ~/.openclaw/config.json5 | grep token`，或参见 OpenClaw 文档。
+3. **配置环境变量**：在仓库根目录 `.env.local` 中设置 `OPENCLAW_LOCAL_URL=ws://localhost:18789`、`OPENCLAW_LOCAL_TOKEN=<token>`、`OPENCLAW_LOCAL_AGENT_ID=default`（可复制 `.env.example` 后填写）。
+4. **重启网关并验证**：执行 `pnpm dev:backend`；可选运行 `pnpm test:client:connection` 验证连通性；主前端 Dashboard 顶部应显示「网关正常 · OpenClaw 已连接」。
+
+详细步骤与验证说明见 [docs/local-openclaw.md](docs/local-openclaw.md)。**按场景的接入操作手册**见 [docs/onboarding-manual.md](docs/onboarding-manual.md)。
+
+示例 `.env.local` 片段（网关 + 本仓控制台/主前端联调）：
 
 ```bash
 OPENCLAW_LOCAL_URL=ws://localhost:18789
@@ -128,6 +140,16 @@ AIFC_GATEWAY_PORT=3001
 NEXT_PUBLIC_GATEWAY_HTTP_URL=http://localhost:3001
 NEXT_PUBLIC_GATEWAY_WS_URL=ws://localhost:3001/ws
 ```
+
+## 与外部前端联调
+
+主前端仓库为 **AIFutureCity-Web/Aifuturecity**（独立仓库）。联调时：
+
+1. 在本仓先启动网关：`pnpm dev:backend`（或 `pnpm --dir backend run dev:gateway`），默认端口 **3001**（`AIFC_GATEWAY_PORT`）。
+2. 在外部前端仓库配置环境变量：`VITE_GATEWAY_HTTP_URL=http://localhost:3001`、`VITE_GATEWAY_WS_URL=ws://localhost:3001/ws`，然后启动前端。
+3. 网关已开启 CORS（`Access-Control-Allow-Origin: *`），前端直连 `http://localhost:3001` 即可，无需同源。
+
+生产部署时可用 Nginx 统一入口：前端静态资源 + `/api`、`/ws` 反代到 gateway。
 
 ## Workspace Validation
 

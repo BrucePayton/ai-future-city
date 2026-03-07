@@ -2,11 +2,11 @@
 
 ## Monorepo layout
 
-- `apps/gateway`: 平台核心后端，负责 HTTP、WebSocket RPC、设备接入、任务编排和会话管理。
-- `apps/agent-sdk`: 设备侧轻量 SDK，负责连接平台、心跳上报和本地执行桥接。
+- 主 Web 门户为**外部仓库**（AIFutureCity-Web/Aifuturecity）；本仓 `web/` 为网关**调试控制台**（可选）。
+- `backend/gateway`: 平台核心后端，负责 HTTP、WebSocket RPC、设备接入、任务编排和会话管理。
+- `client/`: 设备侧（agent-sdk、openclaw-adapter、extensions/aifuturecity）。
 - `packages/*`: 共享协议、类型、注册表和基础设施抽象。
-- `extensions/*`: 外部设备或第三方宿主插件。
-- `services/*`: Python 独立服务，承接知识、推荐等 AI 计算任务。
+- `backend/services/*`: Python 独立服务，承接知识、推荐等 AI 计算任务。
 
 ## Editing guidance
 

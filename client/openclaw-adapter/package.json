@@ -18,7 +18,8 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test:connection": "tsx scripts/test-connection.ts",
-    "test:openai": "tsx scripts/test-openai.ts"
+    "test:openai": "tsx scripts/test-openai.ts",
+    "bridge:inbound": "tsx scripts/openclaw-inbound-bridge.ts"
   },
   "dependencies": {
     "ws": "^8.19.0"
