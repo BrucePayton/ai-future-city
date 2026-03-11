@@ -1,0 +1,35 @@
+import { createAssistantsMethods } from "../methods/assistants.js";
+import { createOpenClawMethods } from "../methods/openclaw.js";
+import { createSystemMethods } from "../methods/system.js";
+import { createTasksMethods } from "../methods/tasks.js";
+import { createWorkspaceMethods } from "../methods/workspace.js";
+import type { DeviceManager } from "../devices/device-manager.js";
+import type { OpenClawGatewayService } from "../openclaw/service.js";
+import type { SessionStore } from "../sessions/session-store.js";
+
+export type RpcHandler = (params: unknown) => Promise<unknown>;
+
+export function createMethodRouter(deps: {
+  devices: DeviceManager;
+  sessions: SessionStore;
+  openClaw: OpenClawGatewayService;
+}) {
+  const handlers: Record<string, RpcHandler> = {
+    ...createAssistantsMethods({ devices: deps.devices, openClaw: deps.openClaw }),
+    ...createOpenClawMethods({ openClaw: deps.openClaw }),
+    ...createTasksMethods({ openClaw: deps.openClaw }),
+    ...createWorkspaceMethods({ sessions: deps.sessions }),
+    ...createSystemMethods({ devices: deps.devices, openClaw: deps.openClaw }),
+  };
+
+  return {
+    async handle(method: string, params: unknown): Promise<unknown> {
+      const handler = handlers[method];
+      if (!handler) {
+        throw new Error(`Unsupported method: ${method}`);
+      }
+
+      return handler(params);
+    },
+  };
+}

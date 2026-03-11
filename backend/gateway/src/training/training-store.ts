@@ -44,19 +44,32 @@ function defaultProgress(): TrainingProgressFull {
   };
 }
 
-export class TrainingProgressStore {
+/** Interface used by HTTP (implemented by TrainingProgressStore and PG store). */
+export type ITrainingProgressStore = {
+  get(assistantId: string): Promise<TrainingProgressFull | undefined>;
+  getOrDefault(assistantId: string): Promise<TrainingProgressFull>;
+  update(
+    assistantId: string,
+    payload: TrainingProgressPayload,
+  ): Promise<TrainingProgressFull>;
+};
+
+export class TrainingProgressStore implements ITrainingProgressStore {
   private readonly store = new Map<string, TrainingProgressFull>();
 
-  get(assistantId: string): TrainingProgressFull | undefined {
+  async get(assistantId: string): Promise<TrainingProgressFull | undefined> {
     return this.store.get(assistantId);
   }
 
-  getOrDefault(assistantId: string): TrainingProgressFull {
+  async getOrDefault(assistantId: string): Promise<TrainingProgressFull> {
     return this.store.get(assistantId) ?? defaultProgress();
   }
 
-  update(assistantId: string, payload: TrainingProgressPayload): TrainingProgressFull {
-    const current = this.getOrDefault(assistantId);
+  async update(
+    assistantId: string,
+    payload: TrainingProgressPayload,
+  ): Promise<TrainingProgressFull> {
+    const current = await this.getOrDefault(assistantId);
     const updated: TrainingProgressFull = {
       chat: payload.chat !== undefined ? { ...current.chat, ...payload.chat } : current.chat,
       exec: payload.exec !== undefined ? { ...current.exec, ...payload.exec } : current.exec,

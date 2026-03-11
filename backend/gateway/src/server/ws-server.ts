@@ -2,24 +2,30 @@ import type http from "node:http";
 
 import { WebSocketServer } from "ws";
 
+import type { DelistedAssistantIds } from "../assistants/assistant-list-state.js";
+import type { HiddenAssistantIds } from "../assistants/assistant-list-state.js";
 import { isGatewayRequestFrame } from "../protocol/frames.js";
 import type { GatewayRequestFrame, GatewayResponseFrame } from "../protocol/frames.js";
 import { createMethodRouter } from "./method-router.js";
 import type { DeviceManager } from "../devices/device-manager.js";
 import type { OpenClawGatewayService } from "../openclaw/service.js";
-import type { SessionStore } from "../sessions/session-store.js";
+import type { ISessionStore } from "../sessions/session-store.js";
 
 export function attachGatewayWebSocketServer(params: {
   server: http.Server;
   path: string;
   devices: DeviceManager;
-  sessions: SessionStore;
+  sessions: ISessionStore;
   openClaw: OpenClawGatewayService;
+  hiddenIds: HiddenAssistantIds;
+  delistedIds: DelistedAssistantIds;
 }) {
   const router = createMethodRouter({
     devices: params.devices,
     sessions: params.sessions,
     openClaw: params.openClaw,
+    hiddenIds: params.hiddenIds,
+    delistedIds: params.delistedIds,
   });
 
   const wss = new WebSocketServer({

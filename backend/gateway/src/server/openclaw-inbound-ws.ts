@@ -2,12 +2,16 @@ import type http from "node:http";
 
 import { WebSocketServer } from "ws";
 
+import type { HiddenAssistantIds } from "../assistants/assistant-list-state.js";
+import type { DeviceManager } from "../devices/device-manager.js";
 import type { InboundOpenClawRegistry } from "../openclaw/inbound-registry.js";
 
 export function attachOpenClawInboundWs(params: {
   server: http.Server;
   path: string;
   registry: InboundOpenClawRegistry;
+  devices: DeviceManager;
+  hiddenIds: HiddenAssistantIds;
 }) {
   const wss = new WebSocketServer({
     server: params.server,
@@ -54,6 +58,14 @@ export function attachOpenClawInboundWs(params: {
 
       if (result.ok) {
         registered = true;
+        params.devices.upsert({
+          id: result.assistantId,
+          kind: "openclaw",
+          status: "online",
+          lastSeenAt: Date.now(),
+          name: result.assistantId,
+        });
+        params.hiddenIds.remove(result.assistantId);
         socket.removeListener("message", onMessage);
         socket.send(
           JSON.stringify({

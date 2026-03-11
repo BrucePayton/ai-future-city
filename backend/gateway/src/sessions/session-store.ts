@@ -4,7 +4,14 @@ export type SessionRecord = {
   status: "active" | "idle";
 };
 
-export class SessionStore {
+/** Interface used by HTTP/WS (implemented by SessionStore and PG store). */
+export type ISessionStore = {
+  list(): Promise<SessionRecord[]>;
+  create(title: string): Promise<SessionRecord>;
+};
+
+/** In-memory implementation. For PG-backed, use createPgSessionStore. */
+export class SessionStore implements ISessionStore {
   private readonly sessions = new Map<string, SessionRecord>();
 
   constructor(seed: SessionRecord[] = []) {
@@ -13,11 +20,11 @@ export class SessionStore {
     }
   }
 
-  list(): SessionRecord[] {
+  async list(): Promise<SessionRecord[]> {
     return [...this.sessions.values()];
   }
 
-  create(title: string): SessionRecord {
+  async create(title: string): Promise<SessionRecord> {
     const id = `ws-${this.sessions.size + 1}`;
     const session = { id, title, status: "active" as const };
     this.sessions.set(id, session);

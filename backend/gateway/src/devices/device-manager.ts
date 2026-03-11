@@ -32,4 +32,17 @@ export class DeviceManager {
   list(): RegisteredDevice[] {
     return [...this.devices.values()];
   }
+
+  /** Remove device by id. Returns true if it existed and was removed. */
+  remove(id: string): boolean {
+    return this.devices.delete(id);
+  }
+
+  /** Replace all devices from snapshot (for persistence load). */
+  loadFromSnapshot(devices: RegisteredDevice[]): void {
+    this.devices.clear();
+    for (const d of devices) {
+      this.devices.set(d.id, { ...d });
+    }
+  }
 }

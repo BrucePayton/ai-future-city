@@ -8,6 +8,9 @@ type OpenClawServiceOptions = {
   enabled: boolean;
   url?: string;
   token?: string;
+  /** Optional: platform-persona OpenClaw for training (e.g. ws://localhost:18790) */
+  platformUrl?: string;
+  platformToken?: string;
   inboundRegistry?: InboundOpenClawRegistry | null;
   assistantId: string;
   defaultAgentId: string;
@@ -16,6 +19,7 @@ type OpenClawServiceOptions = {
 
 export class OpenClawGatewayService {
   private adapter: OpenClawAdapter | null = null;
+  private platformAdapter: OpenClawAdapter | null = null;
 
   constructor(private readonly options: OpenClawServiceOptions) {}
 
@@ -37,6 +41,8 @@ export class OpenClawGatewayService {
     connected: boolean;
     source?: "outbound" | "inbound";
     url?: string;
+    platformConnected?: boolean;
+    platformUrl?: string;
     assistantId: string;
     defaultAgentId: string;
     hello?: unknown;
@@ -66,11 +72,31 @@ export class OpenClawGatewayService {
     try {
       const adapter = await this.getAdapter();
       const hello = await adapter.connect();
+      let platformConnected = false;
+      let platformUrl: string | undefined;
+      let platformHello: unknown;
+      if (this.options.platformUrl && this.options.platformToken) {
+        platformUrl = this.options.platformUrl;
+        try {
+          const plat = await this.getPlatformAdapter();
+          platformConnected = plat.connected;
+          platformHello = plat.helloPayload;
+        } catch (err) {
+          console.warn(
+            "[openclaw] platform connection failed:",
+            this.options.platformUrl,
+            err instanceof Error ? err.message : String(err)
+          );
+        }
+      }
       return {
         enabled: true,
         connected: adapter.connected,
         source: "outbound",
         url: this.options.url,
+        platformConnected,
+        platformUrl,
+        platformHello,
         assistantId: this.options.assistantId,
         defaultAgentId: this.options.defaultAgentId,
         hello,
@@ -159,6 +185,25 @@ export class OpenClawGatewayService {
     });
   }
 
+  /** Use platform OpenClaw for training when configured and connected; otherwise fall back to main connection. */
+  async sendChatForTraining(params: {
+    sessionKey: string;
+    message: string;
+    idempotencyKey?: string;
+  }): Promise<unknown> {
+    if (this.useInbound) {
+      return this.sendChatOverInbound(params);
+    }
+    const { adapter, source } = await this.getAdapterForTrainingWithSource();
+    console.log("[training/chat] using", source === "platform" ? "platform (18790)" : "main (18789)", "for sessionKey:", params.sessionKey);
+    return adapter.sendChat({
+      sessionKey: params.sessionKey,
+      message: params.message,
+      idempotencyKey: params.idempotencyKey ?? randomUUID(),
+      completionTimeoutMs: 60_000,
+    });
+  }
+
   private async sendChatOverInbound(params: {
     sessionKey: string;
     message: string;
@@ -200,7 +245,35 @@ export class OpenClawGatewayService {
     });
   }
 
+  /**
+   * Hot-update the platform token and reconnect. Called by POST /api/openclaw/platform-token
+   * so sync-cli can push the new token after 18790 starts without requiring a gateway restart.
+   */
+  async updatePlatformToken(token: string): Promise<{ ok: boolean; connected: boolean }> {
+    this.options.platformToken = token;
+    if (this.platformAdapter) {
+      this.platformAdapter.disconnect();
+      this.platformAdapter = null;
+    }
+    if (!this.options.platformUrl) {
+      return { ok: true, connected: false };
+    }
+    try {
+      const plat = await this.getPlatformAdapter();
+      console.log("[openclaw] platform token updated, connected:", plat.connected);
+      return { ok: true, connected: plat.connected };
+    } catch (err) {
+      console.warn(
+        "[openclaw] platform reconnect after token update failed:",
+        err instanceof Error ? err.message : String(err),
+      );
+      return { ok: true, connected: false };
+    }
+  }
+
   async disconnect(): Promise<void> {
+    this.platformAdapter?.disconnect();
+    this.platformAdapter = null;
     this.adapter?.disconnect();
     this.adapter = null;
   }
@@ -229,5 +302,48 @@ export class OpenClawGatewayService {
       });
     }
     return this.adapter;
+  }
+
+  private async getPlatformAdapter(): Promise<OpenClawAdapter> {
+    if (!this.options.platformUrl || !this.options.platformToken) {
+      throw new Error("Platform OpenClaw not configured");
+    }
+    if (!this.platformAdapter) {
+      this.platformAdapter = new OpenClawAdapter({
+        url: this.options.platformUrl,
+        token: this.options.platformToken,
+        assistantId: this.options.assistantId,
+        requestTimeoutMs: this.options.requestTimeoutMs,
+      });
+    }
+    await this.platformAdapter.connect();
+    return this.platformAdapter;
+  }
+
+  /** Prefer platform adapter for training when configured; otherwise main outbound (or inbound unchanged). */
+  private async getAdapterForTraining(): Promise<OpenClawAdapter> {
+    const { adapter } = await this.getAdapterForTrainingWithSource();
+    return adapter;
+  }
+
+  private async getAdapterForTrainingWithSource(): Promise<{
+    adapter: OpenClawAdapter;
+    source: "platform" | "main";
+  }> {
+    if (this.useInbound) {
+      throw new Error("getAdapterForTraining should not be used when inbound is active");
+    }
+    if (this.options.platformUrl && this.options.platformToken) {
+      try {
+        const adapter = await this.getPlatformAdapter();
+        return { adapter, source: "platform" };
+      } catch (err) {
+        console.warn(
+          "[openclaw] platform (18790) unavailable for training, using main:",
+          err instanceof Error ? err.message : String(err),
+        );
+      }
+    }
+    return { adapter: await this.requireOutboundAdapter(), source: "main" };
   }
 }

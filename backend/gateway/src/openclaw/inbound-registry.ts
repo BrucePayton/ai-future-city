@@ -17,6 +17,10 @@ type PendingRequest = {
 
 export type InboundEventFrame = { type: "event"; event: string; data?: unknown };
 
+export type InboundOpenClawRegistryOptions = {
+  onConnectionClosed?: (assistantId: string) => void;
+};
+
 /**
  * Registry for OpenClaw "inbound" connections: a client (bridge on user's PC)
  * connects to the gateway and is used to forward requests to local OpenClaw.
@@ -25,9 +29,15 @@ export class InboundOpenClawRegistry {
   private connection: InboundConnection | null = null;
   private readonly pending = new Map<string, PendingRequest>();
   private eventListeners = new Set<(frame: InboundEventFrame) => void>();
+  private readonly onConnectionClosed?: (assistantId: string) => void;
 
   /** Valid token(s) for register. One match is enough. */
-  constructor(private readonly validTokens: Set<string>) {}
+  constructor(
+    private readonly validTokens: Set<string>,
+    options?: InboundOpenClawRegistryOptions,
+  ) {
+    this.onConnectionClosed = options?.onConnectionClosed;
+  }
 
   get connected(): boolean {
     if (!this.connection) return false;
@@ -148,6 +158,7 @@ export class InboundOpenClawRegistry {
   }
 
   private clearConnection(): void {
+    const assistantId = this.connection?.assistantId;
     if (this.connection) {
       this.connection.socket.removeAllListeners();
       try {
@@ -161,6 +172,9 @@ export class InboundOpenClawRegistry {
       clearTimeout(p.timer);
       p.reject(new Error("Inbound OpenClaw connection closed"));
       this.pending.delete(id);
+    }
+    if (assistantId && this.onConnectionClosed) {
+      this.onConnectionClosed(assistantId);
     }
   }
 }

@@ -12,11 +12,21 @@ export type TrainingSessionRecord = {
   progress?: Partial<TrainingProgressFull>;
 };
 
-export class TrainingSessionStore {
+/** Interface used by HTTP (implemented by TrainingSessionStore and PG store). */
+export type ITrainingSessionStore = {
+  create(assistantId: string): Promise<TrainingSessionRecord>;
+  get(sessionId: string): Promise<TrainingSessionRecord | undefined>;
+  update(
+    sessionId: string,
+    progress: Partial<TrainingProgressFull>,
+  ): Promise<void>;
+};
+
+export class TrainingSessionStore implements ITrainingSessionStore {
   private readonly sessions = new Map<string, TrainingSessionRecord>();
   private counter = 0;
 
-  create(assistantId: string): TrainingSessionRecord {
+  async create(assistantId: string): Promise<TrainingSessionRecord> {
     const id = `ts-${Date.now()}-${++this.counter}`;
     const record: TrainingSessionRecord = {
       id,
@@ -27,11 +37,14 @@ export class TrainingSessionStore {
     return record;
   }
 
-  get(sessionId: string): TrainingSessionRecord | undefined {
+  async get(sessionId: string): Promise<TrainingSessionRecord | undefined> {
     return this.sessions.get(sessionId);
   }
 
-  update(sessionId: string, progress: Partial<TrainingProgressFull>): void {
+  async update(
+    sessionId: string,
+    progress: Partial<TrainingProgressFull>,
+  ): Promise<void> {
     const r = this.sessions.get(sessionId);
     if (r) r.progress = { ...r.progress, ...progress };
   }

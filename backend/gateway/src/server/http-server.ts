@@ -6,11 +6,13 @@ import type {
 } from "../assistants/assistant-config.js";
 import type { DeviceManager } from "../devices/device-manager.js";
 import type { RegisteredDevice } from "../devices/device-manager.js";
-import { getAssistantsList } from "../methods/assistants.js";
+import type { DelistedAssistantIds } from "../assistants/assistant-list-state.js";
+import type { HiddenAssistantIds } from "../assistants/assistant-list-state.js";
+import { getAssistantsList, getAssistantsListRaw } from "../methods/assistants.js";
 import type { OpenClawGatewayService } from "../openclaw/service.js";
-import type { SessionStore } from "../sessions/session-store.js";
-import type { TrainingProgressStore } from "../training/training-store.js";
-import type { TrainingSessionStore } from "../training/training-session-store.js";
+import type { ISessionStore } from "../sessions/session-store.js";
+import type { ITrainingProgressStore } from "../training/training-store.js";
+import type { ITrainingSessionStore } from "../training/training-session-store.js";
 import {
   analyzeTask,
   evaluateChat,
@@ -35,11 +37,15 @@ const ASSISTANT_TRAINING_SESSION_RE = /^\/api\/assistants\/([^/]+)\/training\/se
 
 export function createHttpServer(deps: {
   devices: DeviceManager;
-  sessions: SessionStore;
+  sessions: ISessionStore;
   openClaw: OpenClawGatewayService;
   assistantConfig: AssistantConfigStore;
-  trainingProgress: TrainingProgressStore;
-  trainingSessions: TrainingSessionStore;
+  trainingProgress: ITrainingProgressStore;
+  trainingSessions: ITrainingSessionStore;
+  hiddenIds: HiddenAssistantIds;
+  delistedIds: DelistedAssistantIds;
+  /** Optional: persist assistants state after mutations (e.g. to file). */
+  persistAssistantsData?: () => void | Promise<void>;
 }) {
   return http.createServer((req, res) => {
     setCorsHeaders(res);
@@ -63,7 +69,7 @@ export function createHttpServer(deps: {
     if (req.url === "/api/overview") {
       void respondJson(res, 200, async () => ({
         devices: deps.devices.list(),
-        sessions: deps.sessions.list(),
+        sessions: await deps.sessions.list(),
         openClaw: await deps.openClaw.getStatus(),
       }));
       return;
@@ -74,19 +80,53 @@ export function createHttpServer(deps: {
       return;
     }
 
+    if (req.method === "POST" && req.url === "/api/openclaw/platform-token") {
+      void respondJson(res, 200, async () => {
+        const raw = await readRequestBody(req);
+        const body = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+        const token = typeof body?.token === "string" ? body.token : "";
+        if (!token) return { ok: false, error: "Missing token" };
+        return deps.openClaw.updatePlatformToken(token);
+      });
+      return;
+    }
+
     if (req.method === "GET" && req.url === "/api/assistants") {
       void respondJson(res, 200, async () =>
-        getAssistantsList({ devices: deps.devices, openClaw: deps.openClaw }),
+        getAssistantsList({
+          devices: deps.devices,
+          openClaw: deps.openClaw,
+          hiddenIds: deps.hiddenIds,
+          delistedIds: deps.delistedIds,
+        }),
       );
       return;
     }
 
     if (req.method === "POST" && req.url === "/api/assistants/register") {
-      void handleRegisterAssistant(req, res, deps.devices);
+      void handleRegisterAssistant(req, res, deps);
       return;
     }
 
     const path = (req.url ?? "").split("?")[0];
+
+    // GET /api/assistants/:id, DELETE /api/assistants/:id, PATCH /api/assistants/:id
+    const assistantIdMatch = path.match(/^\/api\/assistants\/([^/]+)$/);
+    if (assistantIdMatch) {
+      const id = assistantIdMatch[1];
+      if (req.method === "GET") {
+        void handleGetAssistant(req, res, id, deps);
+        return;
+      }
+      if (req.method === "DELETE") {
+        void handleDeleteAssistant(req, res, id, deps);
+        return;
+      }
+      if (req.method === "PATCH") {
+        void handlePatchAssistant(req, res, id, deps);
+        return;
+      }
+    }
 
     // B3: GET /api/assistants/:id/tools
     const toolsMatch = path.match(ASSISTANT_TOOLS_PATH_RE);
@@ -207,7 +247,7 @@ async function respondJson(
 
 function setCorsHeaders(res: http.ServerResponse): void {
   res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET,POST,PATCH,OPTIONS");
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
 }
 
@@ -238,7 +278,11 @@ type RegisterBody = { id: string; name?: string; kind?: RegisteredDevice["kind"]
 async function handleRegisterAssistant(
   req: http.IncomingMessage,
   res: http.ServerResponse,
-  devices: DeviceManager,
+  deps: {
+    devices: DeviceManager;
+    hiddenIds: HiddenAssistantIds;
+    persistAssistantsData?: () => void | Promise<void>;
+  },
 ): Promise<void> {
   setCorsHeaders(res);
   let body: RegisterBody;
@@ -253,14 +297,19 @@ async function handleRegisterAssistant(
     writeError(res, 400, "Missing or invalid body.id", "INVALID_BODY");
     return;
   }
-  const kind = body.kind === "pc" || body.kind === "sdk" || body.kind === "custom" ? body.kind : "pc";
-  devices.upsert({
+  const kind =
+    body.kind === "pc" || body.kind === "sdk" || body.kind === "custom" || body.kind === "openclaw"
+      ? body.kind
+      : "pc";
+  deps.devices.upsert({
     id: body.id,
     kind,
     status: "offline",
     lastSeenAt: Date.now(),
     name: body.name,
   });
+  deps.hiddenIds.remove(body.id);
+  await deps.persistAssistantsData?.();
   res.writeHead(200, { "Content-Type": "application/json" });
   res.end(JSON.stringify({ ok: true, id: body.id }));
 }
@@ -276,18 +325,21 @@ function readRequestBody(req: http.IncomingMessage): Promise<string> {
 
 type AssistantConfigDeps = {
   devices: DeviceManager;
-  sessions: SessionStore;
+  sessions: ISessionStore;
   openClaw: OpenClawGatewayService;
   assistantConfig: AssistantConfigStore;
-  trainingProgress: TrainingProgressStore;
-  trainingSessions: TrainingSessionStore;
+  trainingProgress: ITrainingProgressStore;
+  trainingSessions: ITrainingSessionStore;
+  hiddenIds: HiddenAssistantIds;
+  delistedIds: DelistedAssistantIds;
+  persistAssistantsData?: () => void | Promise<void>;
 };
 
 async function resolveAssistantById(
   deps: AssistantConfigDeps,
   id: string,
 ): Promise<{ id: string; name: string } | null> {
-  const { assistants } = await getAssistantsList({
+  const assistants = await getAssistantsListRaw({
     devices: deps.devices,
     openClaw: deps.openClaw,
   });
@@ -299,12 +351,102 @@ async function resolveAssistantWithProvider(
   deps: AssistantConfigDeps,
   id: string,
 ): Promise<{ id: string; name: string; provider: string } | null> {
-  const { assistants } = await getAssistantsList({
+  const assistants = await getAssistantsListRaw({
     devices: deps.devices,
     openClaw: deps.openClaw,
   });
   const found = assistants.find((a) => a.id === id);
   return found ? { id: found.id, name: found.name, provider: found.provider } : null;
+}
+
+async function handleGetAssistant(
+  _req: http.IncomingMessage,
+  res: http.ServerResponse,
+  assistantId: string,
+  deps: AssistantConfigDeps,
+): Promise<void> {
+  setCorsHeaders(res);
+  const { assistants } = await getAssistantsList({
+    devices: deps.devices,
+    openClaw: deps.openClaw,
+    hiddenIds: deps.hiddenIds,
+    delistedIds: deps.delistedIds,
+  });
+  const found = assistants.find((a) => a.id === assistantId);
+  if (!found) {
+    writeError(res, 404, "Assistant not found", "ASSISTANT_NOT_FOUND");
+    return;
+  }
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify(found));
+}
+
+async function handleDeleteAssistant(
+  _req: http.IncomingMessage,
+  res: http.ServerResponse,
+  assistantId: string,
+  deps: AssistantConfigDeps,
+): Promise<void> {
+  setCorsHeaders(res);
+  const rawList = await getAssistantsListRaw({
+    devices: deps.devices,
+    openClaw: deps.openClaw,
+  });
+  const found = rawList.find((a) => a.id === assistantId);
+  if (!found) {
+    writeError(res, 404, "Assistant not found", "ASSISTANT_NOT_FOUND");
+    return;
+  }
+  deps.devices.remove(assistantId);
+  deps.assistantConfig.delete(assistantId);
+  deps.hiddenIds.add(assistantId);
+  await deps.persistAssistantsData?.();
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ ok: true, id: assistantId }));
+}
+
+type PatchAssistantBody = { name?: string; isDelisted?: boolean };
+
+async function handlePatchAssistant(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  assistantId: string,
+  deps: AssistantConfigDeps,
+): Promise<void> {
+  setCorsHeaders(res);
+  const { assistants } = await getAssistantsList({
+    devices: deps.devices,
+    openClaw: deps.openClaw,
+    hiddenIds: deps.hiddenIds,
+    delistedIds: deps.delistedIds,
+  });
+  const found = assistants.find((a) => a.id === assistantId);
+  if (!found) {
+    writeError(res, 404, "Assistant not found", "ASSISTANT_NOT_FOUND");
+    return;
+  }
+  let body: PatchAssistantBody;
+  try {
+    const raw = await readRequestBody(req);
+    body = (raw ? JSON.parse(raw) : {}) as PatchAssistantBody;
+  } catch {
+    writeError(res, 400, "Invalid JSON body", "INVALID_BODY");
+    return;
+  }
+  if (body.name !== undefined && typeof body.name === "string") {
+    const device = deps.devices.get(assistantId);
+    if (device) {
+      deps.devices.upsert({ ...device, name: body.name });
+    }
+  }
+  if (body.isDelisted === true) {
+    deps.delistedIds.add(assistantId);
+  } else if (body.isDelisted === false) {
+    deps.delistedIds.remove(assistantId);
+  }
+  await deps.persistAssistantsData?.();
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ ok: true, id: assistantId }));
 }
 
 function extractChatContent(message: unknown): string {
@@ -364,6 +506,7 @@ async function handlePatchAssistantConfig(
     return;
   }
   deps.assistantConfig.update(assistant.id, assistant.name, body);
+  await deps.persistAssistantsData?.();
   res.writeHead(200, { "Content-Type": "application/json" });
   res.end(JSON.stringify({ ok: true, id: assistant.id }));
 }
@@ -377,13 +520,9 @@ async function handleTrainingChatSend(
   deps: AssistantConfigDeps,
 ): Promise<void> {
   setCorsHeaders(res);
-  const assistant = await resolveAssistantWithProvider(deps, assistantId);
+  const assistant = await resolveAssistantById(deps, assistantId);
   if (!assistant) {
     writeError(res, 404, "Assistant not found", "ASSISTANT_NOT_FOUND");
-    return;
-  }
-  if (assistant.provider !== "openclaw") {
-    writeError(res, 501, "Training chat is only supported for OpenClaw assistants", "NOT_OPENCLAW_ASSISTANT");
     return;
   }
   if (!deps.openClaw.isEnabled()) {
@@ -422,7 +561,7 @@ async function handleTrainingChatSend(
 
   try {
     console.log("[training/chat/send] start", { assistantId, sessionKey, messageLen: message.length });
-    const rawMessage = await deps.openClaw.sendChat({
+    const rawMessage = await deps.openClaw.sendChatForTraining({
       sessionKey,
       message,
       idempotencyKey: undefined,
@@ -481,7 +620,7 @@ async function handleChatEvaluate(
     const withProvider = await resolveAssistantWithProvider(deps, assistant.id);
     if (withProvider?.provider === "openclaw") {
       try {
-        const rawReply = await deps.openClaw.sendChat({
+        const rawReply = await deps.openClaw.sendChatForTraining({
           sessionKey: `training-${assistant.id}`,
           message: testPrompt,
           idempotencyKey: undefined,
@@ -499,7 +638,7 @@ async function handleChatEvaluate(
   }
   const config = deps.assistantConfig.getOrDefault(assistant.id, assistant.name);
   const result = evaluateChat(assistant.id, config, { messages });
-  deps.trainingProgress.update(assistant.id, {
+  await deps.trainingProgress.update(assistant.id, {
     chat: { score: result.score, lastEvaluatedAt: new Date().toISOString() },
   });
   res.writeHead(200, { "Content-Type": "application/json" });
@@ -533,7 +672,7 @@ async function handleExecTest(
   }
   const tools = getAssistantTools(assistant.id, deps.assistantConfig);
   const result = await executeToolTest(toolId, tools);
-  const progress = deps.trainingProgress.getOrDefault(assistant.id);
+  const progress = await deps.trainingProgress.getOrDefault(assistant.id);
   const toolResults = [
     ...(progress.exec.toolResults ?? []),
     {
@@ -544,7 +683,7 @@ async function handleExecTest(
     },
   ];
   const passed = toolResults.filter((r) => r.passed).length;
-  deps.trainingProgress.update(assistant.id, {
+  await deps.trainingProgress.update(assistant.id, {
     exec: { passRate: Math.round((passed / toolResults.length) * 100), toolResults },
   });
   res.writeHead(200, { "Content-Type": "application/json" });
@@ -604,8 +743,8 @@ async function handleTaskAnalyze(
     taskDescription: body.taskDescription ?? "",
     taskType: body.taskType,
   });
-  const progress = deps.trainingProgress.getOrDefault(assistant.id);
-  deps.trainingProgress.update(assistant.id, {
+  const progress = await deps.trainingProgress.getOrDefault(assistant.id);
+  await deps.trainingProgress.update(assistant.id, {
     task: { analyzedCount: (progress.task.analyzedCount ?? 0) + 1 },
   });
   res.writeHead(200, { "Content-Type": "application/json" });
@@ -653,7 +792,7 @@ async function handleGetTrainingProgress(
     writeError(res, 404, "Assistant not found", "ASSISTANT_NOT_FOUND");
     return;
   }
-  const progress = deps.trainingProgress.getOrDefault(assistant.id);
+  const progress = await deps.trainingProgress.getOrDefault(assistant.id);
   res.writeHead(200, { "Content-Type": "application/json" });
   res.end(
     JSON.stringify({
@@ -684,7 +823,7 @@ async function handlePostTrainingProgress(
     writeError(res, 400, "Invalid JSON body", "INVALID_BODY");
     return;
   }
-  deps.trainingProgress.update(assistant.id, body);
+  await deps.trainingProgress.update(assistant.id, body);
   res.writeHead(200, { "Content-Type": "application/json" });
   res.end(JSON.stringify({ ok: true }));
 }
@@ -701,7 +840,7 @@ async function handleAssistantTasks(
     writeError(res, 404, "Assistant not found", "ASSISTANT_NOT_FOUND");
     return;
   }
-  const workspaceSessions = deps.sessions.list();
+  const workspaceSessions = await deps.sessions.list();
   const tasks = workspaceSessions.map((s) => ({
     id: s.id,
     title: s.title,
@@ -724,7 +863,7 @@ async function handleCreateTrainingSession(
     writeError(res, 404, "Assistant not found", "ASSISTANT_NOT_FOUND");
     return;
   }
-  const record = deps.trainingSessions.create(assistant.id);
+  const record = await deps.trainingSessions.create(assistant.id);
   res.writeHead(200, { "Content-Type": "application/json" });
   res.end(JSON.stringify({ sessionId: record.id }));
 }
@@ -742,12 +881,12 @@ async function handleGetTrainingSession(
     writeError(res, 404, "Assistant not found", "ASSISTANT_NOT_FOUND");
     return;
   }
-  const session = deps.trainingSessions.get(sessionId);
+  const session = await deps.trainingSessions.get(sessionId);
   if (!session || session.assistantId !== assistant.id) {
     writeError(res, 404, "Training session not found", "SESSION_NOT_FOUND");
     return;
   }
-  const progress = deps.trainingProgress.getOrDefault(assistant.id);
+  const progress = await deps.trainingProgress.getOrDefault(assistant.id);
   res.writeHead(200, { "Content-Type": "application/json" });
   res.end(
     JSON.stringify({

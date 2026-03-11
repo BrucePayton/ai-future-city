@@ -2,6 +2,7 @@ packages:
   - "backend/gateway"
   - "client/agent-sdk"
   - "client/openclaw-adapter"
+  - "client/sync-cli"
   - "client/extensions/*"
   - "web/console"
   - "packages/protocol"

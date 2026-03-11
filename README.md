@@ -45,6 +45,8 @@ ai-future-city/
 - `client/openclaw-adapter`
   - 本地 OpenClaw 直连接入适配器
   - 包含 WebSocket RPC / OpenAI REST 验证脚本
+- `client/sync-cli`
+  - 配置同步 CLI（`aifc-sync`）：将网关助手人格等配置同步到 `~/.aifuturecity`，训练场使用平台配置而不改写 `~/.openclaw`
 - `client/extensions/aifuturecity`
   - OpenClaw 侧插件骨架
   - 用于 OpenClaw 主动出站连接平台
@@ -129,6 +131,34 @@ pnpm --dir client run test:openclaw:openai
 4. **重启网关并验证**：执行 `pnpm dev:backend`；可选运行 `pnpm test:client:connection` 验证连通性；主前端 Dashboard 顶部应显示「网关正常 · OpenClaw 已连接」。
 
 详细步骤与验证说明见 [docs/local-openclaw.md](docs/local-openclaw.md)。**按场景的接入操作手册**见 [docs/onboarding-manual.md](docs/onboarding-manual.md)。
+
+### 配置同步客户端（sync-cli）安装与使用
+
+若需让**训练场**使用的 AI 助手人格与平台「编辑配置」一致（不修改本机 `~/.openclaw`），可安装并运行配置同步客户端，将网关配置同步到平行目录 `~/.aifuturecity`。
+
+**安装与构建**（仓库根目录）：
+
+```bash
+pnpm install
+pnpm --filter @aifc/sync-cli build
+```
+
+**首次配置**：运行交互式配置，按提示输入网关 URL、助手 ID、本地 OpenClaw 配置路径（如 `~/.openclaw`）、平行配置路径（默认 `~/.aifuturecity`）。
+
+```bash
+pnpm --filter @aifc/sync-cli run init
+```
+
+**拉取并写盘**：
+
+- 单次同步：`pnpm --filter @aifc/sync-cli run once`
+- 持续同步（心跳 + 轮询）：`pnpm --filter @aifc/sync-cli run sync`
+
+也可直接运行构建产物：`node client/sync-cli/dist/cli.js init | once | run`。
+
+**让接入的 AI 助手使用平台人格**：在启动 OpenClaw 的终端里先执行 `export OPENCLAW_STATE_DIR="$HOME/.aifuturecity"`（或 Windows 下等价设置），再启动 OpenClaw；该实例会从 `~/.aifuturecity` 读取 SOUL.md 等，训练场即使用平台人格。详见 [docs/sync-cli-training-persona.md](docs/sync-cli-training-persona.md)。
+
+**助手在线状态**：仅运行 sync-cli 不会让助手在网关列表中显示为在线；要让 OpenClaw 助手在线，需额外运行 Inbound Bridge（如 `client/openclaw-adapter` 下 `pnpm run bridge:inbound`），并配置 `GATEWAY_WS_URL`、`OPENCLAW_INBOUND_TOKEN`、`OPENCLAW_GATEWAY_ASSISTANT_ID`。详见 [docs/sync-cli-training-persona.md](docs/sync-cli-training-persona.md) 中「助手在线状态与 Inbound Bridge」。
 
 示例 `.env.local` 片段（网关 + 本仓控制台/主前端联调）：
 

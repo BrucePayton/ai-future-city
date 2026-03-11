@@ -1,0 +1,36 @@
+{
+  "id": "aifuturecity",
+  "name": "AIFutureCity",
+  "description": "Outbound platform bridge for AIFutureCity device registration and task dispatch.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "deviceId",
+      "platformUrl",
+      "platformToken"
+    ],
+    "properties": {
+      "deviceId": {
+        "type": "string",
+        "description": "Registered AIFutureCity device identifier."
+      },
+      "platformUrl": {
+        "type": "string",
+        "description": "AIFutureCity device websocket endpoint."
+      },
+      "platformToken": {
+        "type": "string",
+        "description": "Device authentication token issued by AIFutureCity."
+      },
+      "defaultAgentId": {
+        "type": "string",
+        "description": "Fallback local OpenClaw agent id for task dispatch."
+      },
+      "heartbeatIntervalMs": {
+        "type": "number",
+        "description": "Heartbeat push interval in milliseconds."
+      }
+    }
+  }
+}

@@ -1,5 +1,7 @@
 # 接入本地 OpenClaw 助手
 
+本文档对应 **接入操作手册** 中的「本机 Outbound 接入」场景，提供本地 OpenClaw（默认端口 18789）的完整步骤与验证。场景速查与其它接入方式见 [onboarding-manual.md](./onboarding-manual.md)。
+
 前后端已启动后，按以下步骤接入本地 OpenClaw，使网关连接 OpenClaw 实例，前端 Dashboard 显示「OpenClaw 已连接」并可调用 `openclaw.*` RPC。
 
 ---

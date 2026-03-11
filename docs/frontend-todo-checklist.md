@@ -38,7 +38,8 @@
 
 - [ ] **改为调用真实接口**  
   - 使用 `GET /healthz`（如通过 `getHealth()`）。  
-  - 根据返回的 `openClaw.connected`、`openClaw.source`、`openClaw.error` 渲染状态（如「网关正常 · OpenClaw 已连接」或「OpenClaw 未连接」）。
+  - 根据返回的 `openClaw.connected`、`openClaw.source`、`openClaw.error` 渲染状态（如「网关正常 · OpenClaw 已连接」或「OpenClaw 未连接」）。  
+  - 根据 `openClaw.platformConnected` 显示接入类型：「平台配置助手」或「个人本地助手」，见 [frontend-api-contract.md § 显示接入助手类型](./frontend-api-contract.md#显示接入助手类型个人本地-vs-平台配置)。
 
 - [ ] **（可选）轮询或 WS 刷新**  
   - 若需近实时状态，可定时轮询 `/healthz` 或在建立 WebSocket 后通过 `health` RPC 更新。

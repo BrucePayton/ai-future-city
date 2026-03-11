@@ -38,6 +38,8 @@
     "connected": true,
     "source": "outbound",
     "url": "ws://localhost:18789",
+    "platformConnected": true,
+    "platformUrl": "ws://localhost:18790",
     "assistantId": "aifc-gateway",
     "defaultAgentId": "default",
     "hello": { ... }
@@ -45,9 +47,37 @@
 }
 ```
 
-- `openClaw.connected`：OpenClaw 是否已连接。
+- `openClaw.connected`：OpenClaw 主连接是否已连接。
 - `openClaw.source`：`"outbound"`（网关连 OpenClaw）或 `"inbound"`（OpenClaw 桥接连网关）。
+- `openClaw.url`：主连接 WebSocket URL（通常 `ws://localhost:18789`，对应**个人本地助手**）。
+- `openClaw.platformConnected`：平台配置 OpenClaw（18790）是否已连接；`true` 时训练场 chat 使用**平台配置助手**。
+- `openClaw.platformUrl`：平台连接 URL（如 `ws://localhost:18790`）；仅当配置了 `OPENCLAW_PLATFORM_URL` 时存在。
 - 若未配置或未连接，`openClaw.connected` 为 `false`，可能有 `openClaw.error`。
+
+### 显示接入助手类型（个人本地 vs 平台配置）
+
+前端可通过 `GET /healthz`、`GET /api/overview` 或 WebSocket RPC `openclaw.status` 获取 `openClaw` 对象，用于在状态条/训练场页面显示当前 chat 使用的助手类型：
+
+| 条件 | 显示建议 | 说明 |
+|------|----------|------|
+| `openClaw.platformConnected === true` | **平台配置助手** | 训练场 chat 走平台 OpenClaw（18790），人格来自 `~/.aifuturecity` |
+| `openClaw.platformConnected !== true` 且 `openClaw.connected === true` | **个人本地助手** | 训练场 chat 走主连接（18789），人格来自 `~/.openclaw` |
+| `openClaw.connected === false` | **未连接** | OpenClaw 未连接，chat 不可用 |
+
+**示例判断逻辑（TypeScript）：**
+
+```ts
+const oc = data.openClaw;
+const assistantLabel =
+  oc.platformConnected
+    ? "平台配置助手"
+    : oc.connected
+      ? "个人本地助手"
+      : "未连接";
+const detail = oc.platformConnected && oc.platformUrl
+  ? `${oc.url} (主) · ${oc.platformUrl} (平台)`
+  : oc.url ?? "—";
+```
 
 ---
 
@@ -87,6 +117,8 @@
 | `provider` | string | `openclaw` \| `sdk` \| `pc` \| `custom` |
 | `status` | string | `online` \| `offline` |
 
+**助手在线/离线状态与刷新**：助手的 `status` 由网关根据设备连接与 Inbound 心跳决定（如 Inbound 注册即 online，断开即 offline）。前端应通过 **定时拉取** `GET /api/assistants` 或 `GET /healthz`，或建立 WebSocket 后通过 `assistants.list` / `health` RPC 获取最新状态，以保持列表与状态条与实例连接实时一致；仅加载一次而不刷新会导致接入后仍显示离线。
+
 ---
 
 ### POST /api/assistants/register
@@ -105,7 +137,7 @@
 
 - `id`：必填。
 - `name`：可选。
-- `kind`：可选，`pc` | `sdk` | `custom`，默认 `pc`。
+- `kind`：可选，`pc` | `sdk` | `custom` | `openclaw`，默认 `pc`。若助手将由 OpenClaw Inbound 使用，可传 `kind: "openclaw"`。
 
 **响应**（200）：
 
@@ -198,9 +230,15 @@
 | `openclaw.status` | OpenClaw 状态 | `{}` | 同 /healthz 中的 openClaw |
 | `openclaw.agents.list` | OpenClaw 代理列表 | `{}` | 原始 agents 列表 |
 | `openclaw.tasks.dispatch` | 派发任务 | `{ prompt, workspaceId?, assistantId?, taskId? }` | 任务结果 |
-| `openclaw.chat.send` | 发送聊天 | `{ sessionKey?, message?, idempotencyKey? }` | 流式结果通过 event 回传 |
+| `openclaw.chat.send` | 发送聊天 | `{ sessionKey?, message?, idempotencyKey?, usePlatformPersona? }` | 流式结果通过 event 回传。传 `usePlatformPersona: true` 或 `sessionKey` 以 `training-` 开头时，使用平台人格 OpenClaw（18790）；否则使用主连接（18789）。 |
 | `workspace.list` | 工作区列表 | `{}` | `{ workspaces: [...] }` |
 | `tools.list` | 平台工具列表 | `{}` | `{ tools: [...] }` |
+
+---
+
+## 租户与鉴权
+
+当前网关采用**单租户**（默认租户），不解析请求身份，前端无需携带任何鉴权或租户 Header。后续启用多租户/用户解析时，将要求请求头或 WS 参数中携带身份信息；届时主前端仓库（AIFutureCity-Web/Aifuturecity）中的 `docs/gateway-auth-and-tenant.md` 会说明请求约定与前端需配合的鉴权、租户传递方式。
 
 ---
 

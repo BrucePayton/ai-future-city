@@ -140,4 +140,22 @@ export class AssistantConfigStore {
     this.configs.set(id, updated);
     return updated;
   }
+
+  /** Remove stored config for assistant id. */
+  delete(id: string): void {
+    this.configs.delete(id);
+  }
+
+  /** List all stored configs (for persistence). */
+  list(): AssistantConfigFull[] {
+    return [...this.configs.values()];
+  }
+
+  /** Replace all configs from snapshot (for persistence load). */
+  loadFromSnapshot(configs: AssistantConfigFull[]): void {
+    this.configs.clear();
+    for (const c of configs) {
+      this.configs.set(c.id, { ...c });
+    }
+  }
 }

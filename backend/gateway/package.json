@@ -6,13 +6,17 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "scripts": {
-    "build": "pnpm --filter @aifc/client-openclaw-adapter build && tsc -p tsconfig.json",
+    "build": "pnpm --filter @aifc/client-openclaw-adapter build && tsc -p tsconfig.json && mkdir -p dist/db && cp src/db/schema.sql dist/db/",
     "typecheck": "pnpm --filter @aifc/client-openclaw-adapter build && tsc -p tsconfig.json --noEmit",
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js"
   },
   "dependencies": {
     "@aifc/client-openclaw-adapter": "workspace:*",
+    "pg": "^8.13.0",
     "ws": "^8.19.0"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.11.10"
   }
 }

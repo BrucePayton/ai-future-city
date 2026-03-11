@@ -31,15 +31,25 @@ export function createOpenClawMethods(deps: { openClaw: OpenClawGatewayService }
               sessionKey?: unknown;
               message?: unknown;
               idempotencyKey?: unknown;
+              usePlatformPersona?: unknown;
             })
           : {};
-
-      return deps.openClaw.sendChat({
-        sessionKey: typeof payload.sessionKey === "string" ? payload.sessionKey : "workspace-demo",
+      const sessionKey =
+        typeof payload.sessionKey === "string" ? payload.sessionKey : "workspace-demo";
+      const usePlatformPersona =
+        payload.usePlatformPersona === true ||
+        payload.usePlatformPersona === "true" ||
+        sessionKey.startsWith("training-");
+      const chatParams = {
+        sessionKey,
         message: typeof payload.message === "string" ? payload.message : "Hello from AIFutureCity.",
         idempotencyKey:
           typeof payload.idempotencyKey === "string" ? payload.idempotencyKey : undefined,
-      });
+      };
+      if (usePlatformPersona) {
+        return deps.openClaw.sendChatForTraining(chatParams);
+      }
+      return deps.openClaw.sendChat(chatParams);
     },
   };
 }

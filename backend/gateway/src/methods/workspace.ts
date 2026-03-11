@@ -1,9 +1,9 @@
-import type { SessionStore } from "../sessions/session-store.js";
+import type { ISessionStore } from "../sessions/session-store.js";
 
-export function createWorkspaceMethods(deps: { sessions: SessionStore }) {
+export function createWorkspaceMethods(deps: { sessions: ISessionStore }) {
   return {
     "workspace.list": async () => ({
-      sessions: deps.sessions.list(),
+      sessions: await deps.sessions.list(),
     }),
     "workspace.create": async (params: unknown) => {
       const payload =

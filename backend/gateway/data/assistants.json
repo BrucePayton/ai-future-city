@@ -1,0 +1,67 @@
+{
+  "devices": [
+    {
+      "id": "local-openclaw-001",
+      "kind": "custom",
+      "status": "offline",
+      "lastSeenAt": 1772939174026,
+      "name": "My PC Agent"
+    },
+    {
+      "id": "my-openclaw-001",
+      "kind": "custom",
+      "status": "offline",
+      "lastSeenAt": 1772937214891,
+      "name": "My PC Agent"
+    }
+  ],
+  "configs": [
+    {
+      "id": "main",
+      "name": "main",
+      "persona": {
+        "description": "你是一位全栈软件工程师，擅长 TypeScript/Python 系统设计与代码实现。\n\n## 核心职责\n- 需求拆解与技术方案设计\n- 代码编写与单元测试\n- Code Review 与质量把控",
+        "skillTags": [
+          "software-engineer"
+        ]
+      },
+      "tools": [
+        {
+          "id": "code_exec",
+          "requiresApproval": false
+        },
+        {
+          "id": "web_search",
+          "requiresApproval": false
+        },
+        {
+          "id": "file_read_write",
+          "requiresApproval": false
+        }
+      ],
+      "constraints": [
+        {
+          "rule": "generate-malware",
+          "severity": "medium"
+        },
+        {
+          "rule": "expose-credentials",
+          "severity": "medium"
+        }
+      ],
+      "costControl": {
+        "monthlyTokenLimitM": 50,
+        "costWarningETH": 0.1,
+        "minAcceptPrice": 0.01
+      }
+    }
+  ],
+  "hiddenIds": [
+    "local-openclaw-001",
+    "openclaw_test_001",
+    "my-openclaw-001"
+  ],
+  "delistedIds": [
+    "local-openclaw-001"
+  ]
+}

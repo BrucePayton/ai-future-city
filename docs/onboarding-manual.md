@@ -1,6 +1,6 @@
 # AIFutureCity 接入操作手册
 
-本文档为 **接入操作手册**，按场景给出从零到可用的具体步骤与验证方法。详细协议与架构见 [local-openclaw.md](./local-openclaw.md)、[aifuturecity_architecture.md](./aifuturecity_architecture.md)。
+本文档为 **接入操作手册**，按场景给出从零到可用的具体步骤与验证方法。文档索引见 [README.md](./README.md)；详细协议与架构见 [local-openclaw.md](./local-openclaw.md)、[aifuturecity_architecture.md](./aifuturecity_architecture.md)。
 
 ---
 
@@ -20,29 +20,21 @@
 | **OpenClaw 在本机，网关在服务器** | 个人 PC 的 OpenClaw 接入远端网关 | [三、本机 OpenClaw 入站接入](#三本机-openclaw-入站接入) |
 | **仅登记 PC 助手设备** | 不跑 OpenClaw，只把 PC 登记为助手（列表展示/在线状态） | [四、PC 助手设备接入](#四pc-助手设备接入) |
 | **前端连网关** | 主前端或控制台连本仓网关 | [五、前端与网关联调](#五前端与网关联调) |
+| **训练场人格与平台一致** | 用 sync-cli 同步到 ~/.aifuturecity，训练场使用平台人格（含 18790 双实例与验证步骤） | [sync-cli-training-persona.md](./sync-cli-training-persona.md) |
 
 ---
 
 ## 二、本机 Outbound 接入
 
-**适用**：网关和 OpenClaw 都在同一台机器（如本地开发机）。
+**适用**：网关和 OpenClaw 都在同一台机器（如本地开发机）。**完整步骤与验证、流程图**见 [local-openclaw.md](./local-openclaw.md)，此处为要点摘要。
 
 ### 步骤 1：启动 OpenClaw
 
-- OpenClaw 监听 WebSocket，默认端口 **18789**。
-- 启动后确认端口在监听：
-
-```bash
-lsof -i :18789
-```
+OpenClaw 监听 WebSocket，默认端口 **18789**。启动后执行 `lsof -i :18789` 确认端口在监听。
 
 ### 步骤 2：获取 OpenClaw Token
 
-从 OpenClaw 配置中获取用于网关连接的 token，例如：
-
-```bash
-cat ~/.openclaw/config.json5 | grep token
-```
+从 OpenClaw 配置获取网关连接 token，例如 `cat ~/.openclaw/config.json5 | grep token`。
 
 ### 步骤 3：配置环境变量
 
@@ -55,6 +47,8 @@ OPENCLAW_LOCAL_AGENT_ID=default
 ```
 
 端口若非 18789，请修改 `OPENCLAW_LOCAL_URL` 中的端口。
+
+**可选（训练场使用平台人格）**：若由 sync-cli 启动的平台人格 OpenClaw 使用另一端口（默认 18790），可增加 `OPENCLAW_PLATFORM_URL=ws://localhost:18790` 与 `OPENCLAW_PLATFORM_TOKEN`（可与 `OPENCLAW_LOCAL_TOKEN` 相同）。配置后，训练场相关请求会发往平台实例，其余请求仍使用 `OPENCLAW_LOCAL_URL`。详见 [sync-cli-training-persona.md](./sync-cli-training-persona.md)。
 
 ### 步骤 4：启动网关
 
@@ -82,6 +76,8 @@ pnpm --dir client run test:openclaw:connection
 
 - **前端验证**：打开主前端 Dashboard，状态栏应为 **「网关正常 · OpenClaw 已连接」**。
 - **HTTP 验证**：`curl -s http://localhost:3001/healthz` 中 `openClaw.connected` 应为 `true`。
+
+详细步骤、脚本验证与流程图见 [local-openclaw.md](./local-openclaw.md)。
 
 ---
 
