@@ -137,9 +137,9 @@
    - [x] 返回 `{ ok: true, id }`。
 
 4. **配置生效**
-   - [ ] **任务派发 / 聊天**：派发任务或聊天时，根据 `assistantId` 加载其配置（tools、persona），下发给执行端或 OpenClaw。
-   - [ ] **约束校验**：在执行或工具调用前，按该助手的 `constraints` 做拒绝规则校验。
-   - [ ] **成本控制**：按 `costControl` 做 Token 上限、预警与最低接单价校验（若业务需要）。
+   - [x] **任务派发 / 聊天**：`tasks.dispatch`、`openclaw.tasks.dispatch`、`openclaw.chat.send` 与 HTTP `POST .../training/chat/send` 会按解析出的 `assistantId`（含 `training-` 会话前缀与默认 agent）加载配置，将 **Persona** 前缀写入发往 OpenClaw 的 message/prompt；WS 与 HTTP 路径一致。
+   - [x] **约束校验**：上述路径对用户 prompt/message 做 **deny 规则**校验（含文档示例标签 `generate-malware`、`expose-credentials` 及通用 slug 启发式）；HTTP **chat/evaluate** 校验用户侧文案；**training/exec/test** 在助手配置了非空 `tools` 列表时仅允许已挂载的 `toolId`。
+   - [x] **成本控制**：月度 Token 用量字段 `tokenUsedThisMonthM` 在派发/聊天成功后按粗估增量累加（字符/4/1e6）；若已配置 `monthlyTokenLimitM` 且用量达上限则拒绝（HTTP 429 / WS 报错）；可选请求体字段 `taskPrice`（`tasks.dispatch`、`openclaw.*`）与 `minAcceptPrice` 联动校验。`costWarningETH` 仍为预留（仅展示，不拦截）。
 
 5. **（可选）WebSocket RPC**
    - [ ] 若希望前端通过 WS 拉取/更新配置，可扩展 `assistants.getConfig`、`assistants.updateConfig`，与 HTTP 接口同构。
@@ -164,3 +164,5 @@
 | 更新助手配置 | `PATCH /api/assistants/:id/config` | 保存编辑       |
 
 完成上述接口并令配置在任务/约束/成本环节生效后，前端的「编辑配置」流程（详情/列表 → 单页配置页 → 保存）即可端到端打通。
+
+**网关侧「配置生效」实现说明**（本次落地细节）：见 [backend-assistant-config-enforcement.md](./backend-assistant-config-enforcement.md)。

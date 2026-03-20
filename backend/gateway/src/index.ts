@@ -137,8 +137,27 @@ attachGatewayWebSocketServer({
   devices,
   sessions,
   openClaw,
+  assistantConfig,
   hiddenIds,
   delistedIds,
+  persistAssistantsData: pgPool
+    ? () =>
+        saveAssistantsStatePg(pgPool!, {
+          devices: devices.list(),
+          configs: assistantConfig.list(),
+          hiddenIds: hiddenIds.getAll(),
+          delistedIds: delistedIds.getAll(),
+        })
+    : () =>
+        saveAssistantsState(
+          {
+            devices: devices.list(),
+            configs: assistantConfig.list(),
+            hiddenIds: hiddenIds.getAll(),
+            delistedIds: delistedIds.getAll(),
+          },
+          assistantsDataPath,
+        ),
 });
 
 if (env.openClaw.inboundWsPath) {

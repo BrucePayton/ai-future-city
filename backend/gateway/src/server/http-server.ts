@@ -4,6 +4,12 @@ import type {
   AssistantConfigPayload,
   AssistantConfigStore,
 } from "../assistants/assistant-config.js";
+import {
+  buildPersonaSystemPrefix,
+  contentViolatesDenyConstraints,
+  costMonthlyLimitBlocks,
+  estimateTokensM,
+} from "../assistants/assistant-config-policy.js";
 import type { DeviceManager } from "../devices/device-manager.js";
 import type { RegisteredDevice } from "../devices/device-manager.js";
 import type { DelistedAssistantIds } from "../assistants/assistant-list-state.js";
@@ -548,6 +554,22 @@ async function handleTrainingChatSend(
     writeError(res, 400, "Missing or empty message", "INVALID_BODY");
     return;
   }
+  const cfg = deps.assistantConfig.getOrDefault(assistant.id, assistant.name);
+  const deny = contentViolatesDenyConstraints(message, cfg.constraints);
+  if (deny.violated) {
+    writeError(
+      res,
+      403,
+      `Blocked by constraint: ${deny.rule}`,
+      "CONSTRAINT_BLOCKED",
+    );
+    return;
+  }
+  const cost = costMonthlyLimitBlocks(cfg);
+  if (cost.blocked) {
+    writeError(res, 429, cost.reason ?? "Monthly token limit reached", "COST_LIMIT");
+    return;
+  }
   const sessionKey =
     typeof body?.sessionKey === "string" && body.sessionKey
       ? body.sessionKey
@@ -560,13 +582,22 @@ async function handleTrainingChatSend(
   });
 
   try {
+    const prefix = buildPersonaSystemPrefix(cfg);
+    const augmented = prefix ? prefix + message : message;
     console.log("[training/chat/send] start", { assistantId, sessionKey, messageLen: message.length });
     const rawMessage = await deps.openClaw.sendChatForTraining({
       sessionKey,
-      message,
+      message: augmented,
       idempotencyKey: undefined,
     });
     const content = extractChatContent(rawMessage);
+    const usageDeltaM =
+      estimateTokensM(augmented) + Math.max(estimateTokensM(content), 0.001);
+    const used = cfg.costControl.tokenUsedThisMonthM ?? 0;
+    deps.assistantConfig.update(assistant.id, assistant.name, {
+      costControl: { tokenUsedThisMonthM: used + usageDeltaM },
+    });
+    await deps.persistAssistantsData?.();
     console.log("[training/chat/send] ok", { assistantId, contentLen: String(content).length });
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ role: "assistant", content }));
@@ -616,13 +647,28 @@ async function handleChatEvaluate(
   }
   let messages = body.messages ?? [];
   const testPrompt = typeof body.testPrompt === "string" ? body.testPrompt.trim() : "";
+  const evalConfig = deps.assistantConfig.getOrDefault(assistant.id, assistant.name);
+  if (testPrompt) {
+    const preDeny = contentViolatesDenyConstraints(testPrompt, evalConfig.constraints);
+    if (preDeny.violated) {
+      writeError(
+        res,
+        403,
+        `Blocked by constraint: ${preDeny.rule}`,
+        "CONSTRAINT_BLOCKED",
+      );
+      return;
+    }
+  }
   if (testPrompt && deps.openClaw.isEnabled()) {
     const withProvider = await resolveAssistantWithProvider(deps, assistant.id);
     if (withProvider?.provider === "openclaw") {
       try {
+        const tpPrefix = buildPersonaSystemPrefix(evalConfig);
+        const augmentedPrompt = tpPrefix ? tpPrefix + testPrompt : testPrompt;
         const rawReply = await deps.openClaw.sendChatForTraining({
           sessionKey: `training-${assistant.id}`,
-          message: testPrompt,
+          message: augmentedPrompt,
           idempotencyKey: undefined,
         });
         const content = extractChatContent(rawReply);
@@ -636,8 +682,21 @@ async function handleChatEvaluate(
       }
     }
   }
-  const config = deps.assistantConfig.getOrDefault(assistant.id, assistant.name);
-  const result = evaluateChat(assistant.id, config, { messages });
+  const userBlob = messages
+    .filter((m) => m?.role === "user" && typeof m.content === "string")
+    .map((m) => m.content)
+    .join("\n");
+  const postDeny = contentViolatesDenyConstraints(userBlob, evalConfig.constraints);
+  if (postDeny.violated) {
+    writeError(
+      res,
+      403,
+      `Blocked by constraint: ${postDeny.rule}`,
+      "CONSTRAINT_BLOCKED",
+    );
+    return;
+  }
+  const result = evaluateChat(assistant.id, evalConfig, { messages });
   await deps.trainingProgress.update(assistant.id, {
     chat: { score: result.score, lastEvaluatedAt: new Date().toISOString() },
   });
@@ -668,6 +727,14 @@ async function handleExecTest(
   const toolId = typeof body.toolId === "string" ? body.toolId : "";
   if (!toolId) {
     writeError(res, 400, "Missing toolId", "INVALID_BODY");
+    return;
+  }
+  const execCfg = deps.assistantConfig.getOrDefault(assistant.id, assistant.name);
+  if (
+    execCfg.tools.length > 0 &&
+    !execCfg.tools.some((t) => t.id === toolId)
+  ) {
+    writeError(res, 400, "Tool is not in this assistant's mounted tool list", "TOOL_NOT_MOUNTED");
     return;
   }
   const tools = getAssistantTools(assistant.id, deps.assistantConfig);

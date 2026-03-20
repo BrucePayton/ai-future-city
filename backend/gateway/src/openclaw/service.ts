@@ -27,6 +27,12 @@ export class OpenClawGatewayService {
     return this.options.enabled;
   }
 
+  /** Agent id used for dispatch/chat when caller omits assistantId. */
+  resolveDispatchAgentId(assistantId?: string): string {
+    const trimmed = typeof assistantId === "string" ? assistantId.trim() : "";
+    return trimmed || this.options.defaultAgentId;
+  }
+
   /** Prefer inbound connection when available (OpenClaw on user's PC connecting to gateway). */
   private get inbound(): InboundOpenClawRegistry | null {
     return this.options.inboundRegistry ?? null;
@@ -43,6 +49,7 @@ export class OpenClawGatewayService {
     url?: string;
     platformConnected?: boolean;
     platformUrl?: string;
+    platformHello?: unknown;
     assistantId: string;
     defaultAgentId: string;
     hello?: unknown;
