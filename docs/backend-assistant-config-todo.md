@@ -122,8 +122,8 @@
 ## 三、后端落地步骤（建议顺序）
 
 1. **数据模型与存储**
-   - [x] 为「助手配置」定义存储结构（或复用现有 device/assistant 模型扩展字段）。
-   - [x] 确定存储位置：网关内存（`AssistantConfigStore`）、独立配置文件、或下游服务/DB；若网关无状态，需可持久化存储或同步到 OpenClaw/设备侧。
+   - [x] 为「助手配置」定义存储结构（或复用现有 device/assistant 模型扩展字段）。**本地默认**：无 `DATABASE_URL` 时使用 **SQLite**（`data/assistants.sqlite`，可用 `AIFC_ASSISTANTS_SQLITE_PATH` 覆盖）；表 `assistant_configs` 以 JSON 文本列存 `persona` / `tools` / `constraints` / `cost_control`，与 PostgreSQL 快照语义一致（实现见 `backend/gateway/src/db/persistence-sqlite.ts`，基于 Node 内置 `node:sqlite`，需 **Node 22+**）。设备登记、隐藏/下架 ID 与同库表一并持久化。**设计动机、环境变量与验证**：见 [backend-assistants-sqlite-persistence.md](./backend-assistants-sqlite-persistence.md)。
+   - [x] 确定存储位置：运行态为内存 `AssistantConfigStore`；无 PG 时落盘为 SQLite（或设置 `AIFC_ASSISTANTS_USE_JSON=1` 仅用 `AIFC_ASSISTANTS_DATA_PATH` 的 JSON）；有 `DATABASE_URL` 时为 PostgreSQL。若网关无状态，需可持久化存储或同步到 OpenClaw/设备侧。
 
 2. **GET /api/assistants/:id/config**
    - [x] 在 gateway 中新增路由，根据 `id` 解析助手（来自已登记设备或 OpenClaw 代理）。

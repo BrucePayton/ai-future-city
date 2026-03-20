@@ -1,7 +1,7 @@
 export type GatewayEnv = {
   port: number;
   wsPath: string;
-  /** PostgreSQL connection URL (e.g. postgresql://user:pass@localhost:5432/aifc). When set, assistants state is stored in PG instead of file. */
+  /** PostgreSQL connection URL. When set, assistants state is stored in PG. Otherwise defaults to SQLite (`AIFC_ASSISTANTS_SQLITE_PATH` or `data/assistants.sqlite`); set `AIFC_ASSISTANTS_USE_JSON=1` for legacy JSON file only. */
   databaseUrl?: string;
   nodeEnv: string;
   openClaw: {

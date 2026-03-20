@@ -9,6 +9,7 @@ import {
   loadAssistantsStatePg,
   saveAssistantsStatePg,
 } from "./db/persistence-pg.js";
+import { openAssistantsSqlitePersistence } from "./db/persistence-sqlite.js";
 import {
   createPgSessionStore,
   createPgTrainingProgressStore,
@@ -31,6 +32,11 @@ const env = loadGatewayEnv();
 
 const assistantsDataPath =
   process.env.AIFC_ASSISTANTS_DATA_PATH ?? "data/assistants.json";
+const assistantsSqlitePath =
+  process.env.AIFC_ASSISTANTS_SQLITE_PATH ?? "data/assistants.sqlite";
+const useJsonAssistants = /^(1|true|yes)$/i.test(
+  process.env.AIFC_ASSISTANTS_USE_JSON ?? "",
+);
 
 const devices = new DeviceManager([]);
 const assistantConfig = new AssistantConfigStore();
@@ -38,6 +44,8 @@ const hiddenIds = new HiddenAssistantIds();
 const delistedIds = new DelistedAssistantIds();
 
 let pgPool: import("pg").Pool | null = null;
+let assistantsSqlite: ReturnType<typeof openAssistantsSqlitePersistence> | null =
+  null;
 
 let sessions: import("./sessions/session-store.js").ISessionStore;
 let trainingProgress: import("./training/training-store.js").ITrainingProgressStore;
@@ -60,7 +68,7 @@ if (env.databaseUrl) {
   trainingProgress = createPgTrainingProgressStore(pgPool);
   trainingSessions = createPgTrainingSessionStore(pgPool);
   console.log("[gateway] Using PostgreSQL for assistants persistence");
-} else {
+} else if (useJsonAssistants) {
   const loaded = await loadAssistantsState(assistantsDataPath);
   if (loaded) {
     devices.loadFromSnapshot(loaded.devices);
@@ -80,6 +88,35 @@ if (env.databaseUrl) {
   ]);
   trainingProgress = new TrainingProgressStore();
   trainingSessions = new TrainingSessionStore();
+  console.log(
+    `[gateway] Using JSON assistants persistence at ${assistantsDataPath}`,
+  );
+} else {
+  assistantsSqlite = openAssistantsSqlitePersistence(assistantsSqlitePath, {
+    jsonFallbackPath: assistantsDataPath,
+  });
+  const loaded = await assistantsSqlite.load();
+  if (loaded) {
+    devices.loadFromSnapshot(loaded.devices);
+    assistantConfig.loadFromSnapshot(loaded.configs);
+    hiddenIds.loadFromSnapshot(loaded.hiddenIds);
+    delistedIds.loadFromSnapshot(loaded.delistedIds);
+  } else {
+    devices.upsert({
+      id: "local-openclaw-001",
+      kind: "openclaw",
+      status: "online",
+      lastSeenAt: Date.now(),
+    });
+  }
+  sessions = new SessionStore([
+    { id: "workspace-demo", title: "Phase 0 demo workspace", status: "active" },
+  ]);
+  trainingProgress = new TrainingProgressStore();
+  trainingSessions = new TrainingSessionStore();
+  console.log(
+    `[gateway] Using SQLite assistants persistence at ${assistantsSqlitePath}`,
+  );
 }
 
 const inboundTokens = new Set<string>();
@@ -103,6 +140,19 @@ const openClaw = new OpenClawGatewayService({
   inboundRegistry: openClawInboundRegistry,
 });
 
+const snapshotAssistantsState = () => ({
+  devices: devices.list(),
+  configs: assistantConfig.list(),
+  hiddenIds: hiddenIds.getAll(),
+  delistedIds: delistedIds.getAll(),
+});
+
+const persistAssistantsData = pgPool
+  ? () => saveAssistantsStatePg(pgPool!, snapshotAssistantsState())
+  : assistantsSqlite
+    ? () => assistantsSqlite!.save(snapshotAssistantsState())
+    : () => saveAssistantsState(snapshotAssistantsState(), assistantsDataPath);
+
 const server = createHttpServer({
   devices,
   sessions,
@@ -112,24 +162,7 @@ const server = createHttpServer({
   trainingSessions,
   hiddenIds,
   delistedIds,
-  persistAssistantsData: pgPool
-    ? () =>
-        saveAssistantsStatePg(pgPool!, {
-          devices: devices.list(),
-          configs: assistantConfig.list(),
-          hiddenIds: hiddenIds.getAll(),
-          delistedIds: delistedIds.getAll(),
-        })
-    : () =>
-        saveAssistantsState(
-          {
-            devices: devices.list(),
-            configs: assistantConfig.list(),
-            hiddenIds: hiddenIds.getAll(),
-            delistedIds: delistedIds.getAll(),
-          },
-          assistantsDataPath,
-        ),
+  persistAssistantsData,
 });
 attachGatewayWebSocketServer({
   server,
@@ -140,24 +173,7 @@ attachGatewayWebSocketServer({
   assistantConfig,
   hiddenIds,
   delistedIds,
-  persistAssistantsData: pgPool
-    ? () =>
-        saveAssistantsStatePg(pgPool!, {
-          devices: devices.list(),
-          configs: assistantConfig.list(),
-          hiddenIds: hiddenIds.getAll(),
-          delistedIds: delistedIds.getAll(),
-        })
-    : () =>
-        saveAssistantsState(
-          {
-            devices: devices.list(),
-            configs: assistantConfig.list(),
-            hiddenIds: hiddenIds.getAll(),
-            delistedIds: delistedIds.getAll(),
-          },
-          assistantsDataPath,
-        ),
+  persistAssistantsData,
 });
 
 if (env.openClaw.inboundWsPath) {
@@ -194,5 +210,6 @@ server.listen(env.port, () => {
 process.on("SIGINT", async () => {
   await openClaw.disconnect();
   if (pgPool) await pgPool.end();
+  assistantsSqlite?.close();
   server.close(() => process.exit(0));
 });

@@ -23,7 +23,7 @@
   - 在真正调用 OpenClaw 或返回 local-plan 之前，按 **有效助手 ID** 加载 `AssistantConfigStore` 中的配置并执行约束与成本校验。
   - **有效 ID**：显式 `assistantId` 若为空则使用 `OpenClawGatewayService.resolveDispatchAgentId`（新增），回退到环境里的 `defaultAgentId`。
   - `openclaw.chat.send`：可从 `sessionKey` 的 `training-<id>` 形式解析助手 ID，也可显式传 `assistantId`；有 Persona 时前缀到 `message`。
-  - 派发/聊天 **成功结束后** 按粗估增量更新 `tokenUsedThisMonthM` 并触发与 HTTP 相同的 **持久化回调**（文件或 PostgreSQL，取决于网关启动配置）。
+  - 派发/聊天 **成功结束后** 按粗估增量更新 `tokenUsedThisMonthM` 并触发与 HTTP 相同的 **持久化回调**（默认 SQLite、可选仅 JSON、或 PostgreSQL，取决于网关启动配置）。持久化分层说明见 [backend-assistants-sqlite-persistence.md](./backend-assistants-sqlite-persistence.md)。
 - **返回差异**：
   - `tasks.dispatch`：策略拒绝时返回 `{ accepted: false, provider: "policy", code, error }`（如 `CONSTRAINT_BLOCKED`、`COST_LIMIT`、`PRICE_TOO_LOW`），不抛异常。
   - `openclaw.tasks.dispatch` / `openclaw.chat.send`：策略拒绝时 **抛错**，由 WS 层统一变成 `ok: false`（`message` 中带 `CONSTRAINT_BLOCKED:` 等前缀），与原有 RPC 错误形态一致。
