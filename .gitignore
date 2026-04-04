@@ -202,6 +202,9 @@ cython_debug/
 .cursorignore
 .cursorindexingignore
 
+# Gateway local integration / scratch SQLite tests
+backend/gateway/.test-run/
+
 # Node / TypeScript
 node_modules/
 .pnpm-store/

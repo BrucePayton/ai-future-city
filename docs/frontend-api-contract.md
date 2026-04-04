@@ -229,10 +229,13 @@ const detail = oc.platformConnected && oc.platformUrl
 | `assistants.register` | 登记助手 | `{ id, name?, kind? }` | `{ ok: true, id }` |
 | `openclaw.status` | OpenClaw 状态 | `{}` | 同 /healthz 中的 openClaw |
 | `openclaw.agents.list` | OpenClaw 代理列表 | `{}` | 原始 agents 列表 |
-| `openclaw.tasks.dispatch` | 派发任务 | `{ prompt, workspaceId?, assistantId?, taskId? }` | 任务结果 |
-| `openclaw.chat.send` | 发送聊天 | `{ sessionKey?, message?, idempotencyKey?, usePlatformPersona? }` | 流式结果通过 event 回传。传 `usePlatformPersona: true` 或 `sessionKey` 以 `training-` 开头时，使用平台人格 OpenClaw（18790）；否则使用主连接（18789）。 |
+| `tasks.dispatch` | 派发任务（与 OpenClaw 解耦的聚合入口） | `{ prompt, workspaceId?, assistantId?, taskId?, taskPrice? }` | 成功：`{ accepted: true, provider, dispatch? \| plan? }`。策略拒绝：`{ accepted: false, provider: "policy", code, error }`（`code` 如 `CONSTRAINT_BLOCKED`、`COST_LIMIT`、`PRICE_TOO_LOW`）。 |
+| `openclaw.tasks.dispatch` | 直连 OpenClaw 派发 | 同上 + `taskPrice?` | 成功为 OpenClaw 返回体；若触发助手策略（约束 / 月度 Token / 最低价）则 WS 返回 `ok: false`，`message` 以 `CONSTRAINT_BLOCKED:`、`COST_LIMIT:`、`PRICE_TOO_LOW:` 开头。 |
+| `openclaw.chat.send` | 发送聊天 | `{ sessionKey?, message?, idempotencyKey?, usePlatformPersona?, assistantId?, taskPrice? }` | 流式结果通过 event 回传。`sessionKey` 以 `training-` 开头时从后缀解析 `assistantId`；亦可显式传 `assistantId`。若配置了 Persona，会前缀到 message。策略拒绝时同 `openclaw.tasks.dispatch`。传 `usePlatformPersona: true` 或 `sessionKey` 以 `training-` 开头时，使用平台人格 OpenClaw（18790）；否则使用主连接（18789）。 |
 | `workspace.list` | 工作区列表 | `{}` | `{ workspaces: [...] }` |
 | `tools.list` | 平台工具列表 | `{}` | `{ tools: [...] }` |
+
+派发与聊天会按助手配置**预填 Persona**、校验 **constraints（deny 规则）**、**月度 Token 上限**（`monthlyTokenLimitM` vs `tokenUsedThisMonthM`，成功后粗估累加用量），以及可选的 **`taskPrice` vs `minAcceptPrice`**。
 
 ---
 

@@ -4,6 +4,12 @@ import type {
   AssistantConfigPayload,
   AssistantConfigStore,
 } from "../assistants/assistant-config.js";
+import {
+  buildPersonaSystemPrefix,
+  contentViolatesDenyConstraints,
+  costMonthlyLimitBlocks,
+  estimateTokensM,
+} from "../assistants/assistant-config-policy.js";
 import type { DeviceManager } from "../devices/device-manager.js";
 import type { RegisteredDevice } from "../devices/device-manager.js";
 import type { DelistedAssistantIds } from "../assistants/assistant-list-state.js";
@@ -21,6 +27,8 @@ import {
   getAssistantTools,
   injectToolHints,
 } from "../training/training-handlers.js";
+import type { PgPool } from "../db/client.js";
+import { createMarketplaceMethods } from "../methods/marketplace.js";
 
 const ASSISTANT_CONFIG_PATH_RE = /^\/api\/assistants\/([^/]+)\/config$/;
 const ASSISTANT_TOOLS_PATH_RE = /^\/api\/assistants\/([^/]+)\/tools$/;
@@ -44,9 +52,15 @@ export function createHttpServer(deps: {
   trainingSessions: ITrainingSessionStore;
   hiddenIds: HiddenAssistantIds;
   delistedIds: DelistedAssistantIds;
+  pool?: PgPool;
   /** Optional: persist assistants state after mutations (e.g. to file). */
   persistAssistantsData?: () => void | Promise<void>;
 }) {
+  // 创建 marketplace 方法处理器
+  let marketplaceHandlers: ReturnType<typeof createMarketplaceMethods> | null = null;
+  if (deps.pool) {
+    marketplaceHandlers = createMarketplaceMethods({ pool: deps.pool });
+  }
   return http.createServer((req, res) => {
     setCorsHeaders(res);
 
@@ -224,6 +238,160 @@ export function createHttpServer(deps: {
       }
     }
 
+    // ========================================
+    // Marketplace API (技能交易平台)
+    // ========================================
+
+    if (marketplaceHandlers) {
+      // Skills API - Create
+      if (req.method === "POST" && req.url === "/api/skills") {
+        void handleJsonBody(req, async (body) => {
+          return marketplaceHandlers!["skills.create"](body);
+        }, res);
+        return;
+      }
+
+      // Skills API - List
+      if (req.method === "GET" && req.url === "/api/skills") {
+        void handleJsonBody(req, async (body) => {
+          return marketplaceHandlers!["skills.list"](body || {});
+        }, res);
+        return;
+      }
+
+      // Skills API - Get by ID
+      const skillIdMatch = req.url?.match(/^\/api\/skills\/([a-f0-9-]+)$/);
+      if (skillIdMatch && marketplaceHandlers) {
+        const skillId = skillIdMatch[1];
+        if (req.method === "GET") {
+          void respondJson(res, 200, async () => {
+            return marketplaceHandlers!["skills.get"]({ id: skillId });
+          });
+          return;
+        }
+        if (req.method === "PATCH" || req.method === "PUT") {
+          void handleJsonBody(req, async (body) => {
+            return marketplaceHandlers!["skills.update"]({ id: skillId, ...body });
+          }, res);
+          return;
+        }
+        if (req.method === "DELETE") {
+          void handleJsonBody(req, async () => {
+            return marketplaceHandlers!["skills.setStatus"]({ id: skillId, status: "archived" });
+          }, res);
+          return;
+        }
+      }
+
+      // Orders API - Create
+      if (req.method === "POST" && req.url === "/api/orders") {
+        void handleJsonBody(req, async (body) => {
+          return marketplaceHandlers!["orders.create"](body);
+        }, res);
+        return;
+      }
+
+      // Orders API - Get by ID
+      const orderIdMatch = req.url?.match(/^\/api\/orders\/([a-f0-9-]+)$/);
+      if (orderIdMatch && marketplaceHandlers) {
+        const orderId = orderIdMatch[1];
+        if (req.method === "GET") {
+          void respondJson(res, 200, async () => {
+            return marketplaceHandlers!["orders.get"]({ id: orderId });
+          });
+          return;
+        }
+      }
+
+      // Wallet API - Get balance
+      if (req.method === "GET" && req.url?.startsWith("/api/wallet")) {
+        const url = new URL(req.url, `http://localhost`);
+        const userId = url.searchParams.get("userId");
+        if (userId) {
+          void respondJson(res, 200, async () => {
+            return marketplaceHandlers!["wallet.get"]({ userId });
+          });
+          return;
+        }
+      }
+
+      // Wallet API - Withdraw
+      if (req.method === "POST" && req.url === "/api/wallet/withdraw") {
+        void handleJsonBody(req, async (body) => {
+          return marketplaceHandlers!["wallet.withdraw"](body);
+        }, res);
+        return;
+      }
+
+      // Reviews API - Create
+      if (req.method === "POST" && req.url === "/api/reviews") {
+        void handleJsonBody(req, async (body) => {
+          return marketplaceHandlers!["reviews.create"](body);
+        }, res);
+        return;
+      }
+
+      // Payment API - Check enabled
+      if (req.method === "GET" && req.url === "/api/payment/status") {
+        void respondJson(res, 200, async () => {
+          // Use type assertion to call the method with correct type
+          const handler = marketplaceHandlers!["payment.isEnabled"] as () => Promise<unknown>;
+          return handler();
+        });
+        return;
+      }
+
+      // Payment API - Create escrow
+      if (req.method === "POST" && req.url === "/api/payment/escrow") {
+        void handleJsonBody(req, async (body) => {
+          return marketplaceHandlers!["payment.createEscrow"](body);
+        }, res);
+        return;
+      }
+
+      // Payment API - Fund escrow
+      if (req.method === "POST" && req.url === "/api/payment/fund") {
+        void handleJsonBody(req, async (body) => {
+          return marketplaceHandlers!["payment.fund"](body);
+        }, res);
+        return;
+      }
+
+      // Payment API - Claim milestone
+      if (req.method === "POST" && req.url === "/api/payment/claim") {
+        void handleJsonBody(req, async (body) => {
+          return marketplaceHandlers!["payment.claimMilestone"](body);
+        }, res);
+        return;
+      }
+
+      // Payment API - Release milestone
+      if (req.method === "POST" && req.url === "/api/payment/release") {
+        void handleJsonBody(req, async (body) => {
+          return marketplaceHandlers!["payment.releaseMilestone"](body);
+        }, res);
+        return;
+      }
+
+      // Payment API - Get escrow status
+      const escrowStatusMatch = req.url?.match(/^\/api\/payment\/escrow\/([a-f0-9-]+)$/);
+      if (escrowStatusMatch && req.method === "GET") {
+        const orderId = escrowStatusMatch[1];
+        void respondJson(res, 200, async () => {
+          return marketplaceHandlers!["payment.getEscrowStatus"]({ orderId });
+        });
+        return;
+      }
+
+      // Payment API - Verify transaction
+      if (req.method === "POST" && req.url === "/api/payment/verify") {
+        void handleJsonBody(req, async (body) => {
+          return marketplaceHandlers!["payment.verify"](body);
+        }, res);
+        return;
+      }
+    }
+
     writeError(res, 404, "Not Found", "NOT_FOUND");
   });
 }
@@ -321,6 +489,25 @@ function readRequestBody(req: http.IncomingMessage): Promise<string> {
     req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
     req.on("error", reject);
   });
+}
+
+async function handleJsonBody(
+  req: http.IncomingMessage,
+  handler: (body: Record<string, unknown>) => Promise<unknown>,
+  res: http.ServerResponse,
+): Promise<void> {
+  try {
+    const bodyStr = await readRequestBody(req);
+    const body = bodyStr ? JSON.parse(bodyStr) : {};
+    const result = await handler(body);
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify(result));
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error("[gateway] API error:", msg);
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: false, error: msg }));
+  }
 }
 
 type AssistantConfigDeps = {
@@ -548,6 +735,22 @@ async function handleTrainingChatSend(
     writeError(res, 400, "Missing or empty message", "INVALID_BODY");
     return;
   }
+  const cfg = deps.assistantConfig.getOrDefault(assistant.id, assistant.name);
+  const deny = contentViolatesDenyConstraints(message, cfg.constraints);
+  if (deny.violated) {
+    writeError(
+      res,
+      403,
+      `Blocked by constraint: ${deny.rule}`,
+      "CONSTRAINT_BLOCKED",
+    );
+    return;
+  }
+  const cost = costMonthlyLimitBlocks(cfg);
+  if (cost.blocked) {
+    writeError(res, 429, cost.reason ?? "Monthly token limit reached", "COST_LIMIT");
+    return;
+  }
   const sessionKey =
     typeof body?.sessionKey === "string" && body.sessionKey
       ? body.sessionKey
@@ -560,13 +763,22 @@ async function handleTrainingChatSend(
   });
 
   try {
+    const prefix = buildPersonaSystemPrefix(cfg);
+    const augmented = prefix ? prefix + message : message;
     console.log("[training/chat/send] start", { assistantId, sessionKey, messageLen: message.length });
     const rawMessage = await deps.openClaw.sendChatForTraining({
       sessionKey,
-      message,
+      message: augmented,
       idempotencyKey: undefined,
     });
     const content = extractChatContent(rawMessage);
+    const usageDeltaM =
+      estimateTokensM(augmented) + Math.max(estimateTokensM(content), 0.001);
+    const used = cfg.costControl.tokenUsedThisMonthM ?? 0;
+    deps.assistantConfig.update(assistant.id, assistant.name, {
+      costControl: { tokenUsedThisMonthM: used + usageDeltaM },
+    });
+    await deps.persistAssistantsData?.();
     console.log("[training/chat/send] ok", { assistantId, contentLen: String(content).length });
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ role: "assistant", content }));
@@ -616,13 +828,28 @@ async function handleChatEvaluate(
   }
   let messages = body.messages ?? [];
   const testPrompt = typeof body.testPrompt === "string" ? body.testPrompt.trim() : "";
+  const evalConfig = deps.assistantConfig.getOrDefault(assistant.id, assistant.name);
+  if (testPrompt) {
+    const preDeny = contentViolatesDenyConstraints(testPrompt, evalConfig.constraints);
+    if (preDeny.violated) {
+      writeError(
+        res,
+        403,
+        `Blocked by constraint: ${preDeny.rule}`,
+        "CONSTRAINT_BLOCKED",
+      );
+      return;
+    }
+  }
   if (testPrompt && deps.openClaw.isEnabled()) {
     const withProvider = await resolveAssistantWithProvider(deps, assistant.id);
     if (withProvider?.provider === "openclaw") {
       try {
+        const tpPrefix = buildPersonaSystemPrefix(evalConfig);
+        const augmentedPrompt = tpPrefix ? tpPrefix + testPrompt : testPrompt;
         const rawReply = await deps.openClaw.sendChatForTraining({
           sessionKey: `training-${assistant.id}`,
-          message: testPrompt,
+          message: augmentedPrompt,
           idempotencyKey: undefined,
         });
         const content = extractChatContent(rawReply);
@@ -636,8 +863,21 @@ async function handleChatEvaluate(
       }
     }
   }
-  const config = deps.assistantConfig.getOrDefault(assistant.id, assistant.name);
-  const result = evaluateChat(assistant.id, config, { messages });
+  const userBlob = messages
+    .filter((m) => m?.role === "user" && typeof m.content === "string")
+    .map((m) => m.content)
+    .join("\n");
+  const postDeny = contentViolatesDenyConstraints(userBlob, evalConfig.constraints);
+  if (postDeny.violated) {
+    writeError(
+      res,
+      403,
+      `Blocked by constraint: ${postDeny.rule}`,
+      "CONSTRAINT_BLOCKED",
+    );
+    return;
+  }
+  const result = evaluateChat(assistant.id, evalConfig, { messages });
   await deps.trainingProgress.update(assistant.id, {
     chat: { score: result.score, lastEvaluatedAt: new Date().toISOString() },
   });
@@ -668,6 +908,14 @@ async function handleExecTest(
   const toolId = typeof body.toolId === "string" ? body.toolId : "";
   if (!toolId) {
     writeError(res, 400, "Missing toolId", "INVALID_BODY");
+    return;
+  }
+  const execCfg = deps.assistantConfig.getOrDefault(assistant.id, assistant.name);
+  if (
+    execCfg.tools.length > 0 &&
+    !execCfg.tools.some((t) => t.id === toolId)
+  ) {
+    writeError(res, 400, "Tool is not in this assistant's mounted tool list", "TOOL_NOT_MOUNTED");
     return;
   }
   const tools = getAssistantTools(assistant.id, deps.assistantConfig);

@@ -25,6 +25,14 @@
 
 ---
 
+## 实现说明（变更记录）
+
+| 文档 | 说明 |
+|------|------|
+| [backend-assistant-config-enforcement.md](./backend-assistant-config-enforcement.md) | 助手配置在派发、聊天、训练 HTTP 中的生效实现：做了什么、用途与设计取舍 |
+
+---
+
 ## 运维与架构
 
 | 文档 | 说明 |
