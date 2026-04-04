@@ -163,6 +163,7 @@ const server = createHttpServer({
   hiddenIds,
   delistedIds,
   persistAssistantsData,
+  pool: pgPool || undefined,
 });
 attachGatewayWebSocketServer({
   server,

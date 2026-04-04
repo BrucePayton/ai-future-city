@@ -6,9 +6,11 @@ import { createOpenClawMethods } from "../methods/openclaw.js";
 import { createSystemMethods } from "../methods/system.js";
 import { createTasksMethods } from "../methods/tasks.js";
 import { createWorkspaceMethods } from "../methods/workspace.js";
+import { createMarketplaceMethods } from "../methods/marketplace.js";
 import type { DeviceManager } from "../devices/device-manager.js";
 import type { OpenClawGatewayService } from "../openclaw/service.js";
 import type { ISessionStore } from "../sessions/session-store.js";
+import type { PgPool } from "../db/client.js";
 
 export type RpcHandler = (params: unknown) => Promise<unknown>;
 
@@ -19,6 +21,7 @@ export function createMethodRouter(deps: {
   assistantConfig: AssistantConfigStore;
   hiddenIds: HiddenAssistantIds;
   delistedIds: DelistedAssistantIds;
+  pool?: PgPool;
   persistAssistantsData?: () => void | Promise<void>;
 }) {
   const handlers: Record<string, RpcHandler> = {
@@ -43,6 +46,12 @@ export function createMethodRouter(deps: {
     ...createWorkspaceMethods({ sessions: deps.sessions }),
     ...createSystemMethods({ devices: deps.devices, openClaw: deps.openClaw }),
   };
+
+  // 添加技能交易平台方法（如果提供了 pool）
+  if (deps.pool) {
+    const marketplaceHandlers = createMarketplaceMethods({ pool: deps.pool });
+    Object.assign(handlers, marketplaceHandlers);
+  }
 
   return {
     async handle(method: string, params: unknown): Promise<unknown> {

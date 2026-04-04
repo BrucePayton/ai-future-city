@@ -19,6 +19,17 @@ export type GatewayEnv = {
     defaultAgentId: string;
     requestTimeoutMs: number;
   };
+  payment: {
+    enabled: boolean;
+    /** Escrow contract address */
+    escrowContractAddress?: string;
+    /** Private key for contract interactions (platform operator) */
+    escrowPrivateKey?: string;
+    /** RPC URL for blockchain */
+    escrowRpcUrl?: string;
+    /** Default commission rate (0.1 = 10%) */
+    defaultCommissionRate: number;
+  };
 };
 
 export function loadGatewayEnv(): GatewayEnv {
@@ -26,6 +37,12 @@ export function loadGatewayEnv(): GatewayEnv {
     Boolean(process.env.OPENCLAW_LOCAL_URL && process.env.OPENCLAW_LOCAL_TOKEN);
   const inboundToken = process.env.OPENCLAW_INBOUND_TOKEN ?? process.env.OPENCLAW_LOCAL_TOKEN;
   const hasInbound = Boolean(inboundToken);
+
+  const paymentEnabled = Boolean(
+    process.env.ESCROW_CONTRACT_ADDRESS &&
+    process.env.ESCROW_PRIVATE_KEY &&
+    process.env.ESCROW_RPC_URL
+  );
 
   return {
     port: Number.parseInt(process.env.PORT ?? process.env.AIFC_GATEWAY_PORT ?? "3001", 10),
@@ -44,6 +61,13 @@ export function loadGatewayEnv(): GatewayEnv {
       assistantId: process.env.OPENCLAW_GATEWAY_ASSISTANT_ID ?? "aifc-gateway",
       defaultAgentId: process.env.OPENCLAW_LOCAL_AGENT_ID ?? "default",
       requestTimeoutMs: Number.parseInt(process.env.OPENCLAW_REQUEST_TIMEOUT_MS ?? "20000", 10),
+    },
+    payment: {
+      enabled: paymentEnabled,
+      escrowContractAddress: process.env.ESCROW_CONTRACT_ADDRESS,
+      escrowPrivateKey: process.env.ESCROW_PRIVATE_KEY,
+      escrowRpcUrl: process.env.ESCROW_RPC_URL,
+      defaultCommissionRate: Number.parseFloat(process.env.DEFAULT_COMMISSION_RATE ?? "0.1"),
     },
   };
 }

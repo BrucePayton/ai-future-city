@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@aifc/client-openclaw-adapter": "workspace:*",
+    "ethers": "^6.13.0",
     "pg": "^8.13.0",
     "ws": "^8.19.0"
   },

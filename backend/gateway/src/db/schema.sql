@@ -176,3 +176,211 @@ BEGIN
     ALTER TABLE assistant_delisted_ids ADD PRIMARY KEY (tenant_id, id);
   END IF;
 END $$;
+
+-- ============================================================
+-- Skill Marketplace Tables (技能交易平台)
+-- ============================================================
+
+-- 8) Skills / Services (技能/服务)
+CREATE TABLE IF NOT EXISTS skills (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE DEFAULT 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11',
+  owner_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  description TEXT,
+  category TEXT NOT NULL DEFAULT 'general',
+  pricing JSONB NOT NULL DEFAULT '{}',
+  commission_rate DECIMAL(5,4) DEFAULT 0.10,
+  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','published','archived')),
+  stats JSONB DEFAULT '{"viewCount": 0, "salesCount": 0, "avgRating": 0}',
+  tags TEXT[] DEFAULT '{}',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_skills_tenant_id ON skills(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_skills_owner_id ON skills(owner_id);
+CREATE INDEX IF NOT EXISTS idx_skills_category ON skills(category);
+CREATE INDEX IF NOT EXISTS idx_skills_status ON skills(status);
+
+-- 9) Orders (订单)
+CREATE TABLE IF NOT EXISTS orders (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE DEFAULT 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11',
+  idempotency_key TEXT UNIQUE,
+  skill_id UUID NOT NULL REFERENCES skills(id),
+  buyer_id UUID NOT NULL REFERENCES users(id),
+  seller_id UUID NOT NULL REFERENCES users(id),
+  amount DECIMAL(20,8) NOT NULL,
+  commission DECIMAL(20,8) NOT NULL,
+  net_amount DECIMAL(20,8) NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','paid','completed','cancelled','refunded')),
+  milestone_id UUID,
+  tx_hash TEXT,
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS orders_tenant_id ON orders(tenant_id);
+CREATE INDEX IF NOT EXISTS orders_skill_id ON orders(skill_id);
+CREATE INDEX IF NOT EXISTS orders_buyer_id ON orders(buyer_id);
+CREATE INDEX IF NOT EXISTS orders_seller_id ON orders(seller_id);
+CREATE INDEX IF NOT EXISTS orders_status ON orders(status);
+
+-- 10) Reviews (评价)
+CREATE TABLE IF NOT EXISTS reviews (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE DEFAULT 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11',
+  order_id UUID NOT NULL REFERENCES orders(id),
+  reviewer_id UUID NOT NULL REFERENCES users(id),
+  reviewee_id UUID NOT NULL REFERENCES users(id),
+  skill_id UUID REFERENCES skills(id),
+  rating INT CHECK (rating >= 1 AND rating <= 5),
+  comment TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS reviews_tenant_id ON reviews(tenant_id);
+CREATE INDEX IF NOT EXISTS reviews_order_id ON reviews(order_id);
+CREATE INDEX IF NOT EXISTS reviews_reviewee_id ON reviews(reviewee_id);
+CREATE INDEX IF NOT EXISTS reviews_skill_id ON reviews(skill_id);
+
+-- 11) Wallets (钱包)
+CREATE TABLE IF NOT EXISTS wallets (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE DEFAULT 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11',
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE UNIQUE,
+  balance DECIMAL(20,8) DEFAULT 0,
+  pending_balance DECIMAL(20,8) DEFAULT 0,
+  total_earned DECIMAL(20,8) DEFAULT 0,
+  total_withdrawn DECIMAL(20,8) DEFAULT 0,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS wallets_user_id ON wallets(user_id);
+CREATE INDEX IF NOT EXISTS wallets_tenant_id ON wallets(tenant_id);
+
+-- 12) Withdrawals (提现记录)
+CREATE TABLE IF NOT EXISTS withdrawals (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE DEFAULT 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11',
+  wallet_id UUID NOT NULL REFERENCES wallets(id),
+  amount DECIMAL(20,8) NOT NULL,
+  fee DECIMAL(20,8) DEFAULT 0,
+  net_amount DECIMAL(20,8) NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','processing','completed','failed')),
+  tx_hash TEXT,
+  failure_reason TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  processed_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS withdrawals_wallet_id ON withdrawals(wallet_id);
+CREATE INDEX IF NOT EXISTS withdrawals_status ON withdrawals(status);
+CREATE INDEX IF NOT EXISTS withdrawals_tenant_id ON withdrawals(tenant_id);
+
+-- 13) Platform Revenue (平台收入)
+CREATE TABLE IF NOT EXISTS platform_revenue (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE DEFAULT 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11',
+  order_id UUID REFERENCES orders(id),
+  withdrawal_id UUID REFERENCES withdrawals(id),
+  amount DECIMAL(20,8) NOT NULL,
+  type TEXT NOT NULL CHECK (type IN ('commission','withdrawal_fee','listing_fee','other')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS platform_revenue_tenant_id ON platform_revenue(tenant_id);
+CREATE INDEX IF NOT EXISTS platform_revenue_type ON platform_revenue(type);
+
+-- ============================================================
+-- Payment Gateway Tables (多币种支付)
+-- ============================================================
+
+-- 14) Payment Orders (支付订单)
+CREATE TABLE IF NOT EXISTS payment_orders (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE DEFAULT 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11',
+  user_id UUID NOT NULL REFERENCES users(id),
+  order_no TEXT NOT NULL UNIQUE,
+  amount DECIMAL(20,8) NOT NULL,
+  currency TEXT NOT NULL CHECK (currency IN ('ETH','BTC','USDT','USDC','BNB','CNY','USD')),
+  payment_method TEXT NOT NULL,
+  usd_amount DECIMAL(20,8) NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','processing','completed','failed','cancelled')),
+  tx_hash TEXT,
+  fiat_provider TEXT,
+  fiat_order_id TEXT,
+  expires_at TIMESTAMPTZ NOT NULL,
+  completed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS payment_orders_user_id ON payment_orders(user_id);
+CREATE INDEX IF NOT EXISTS payment_orders_order_no ON payment_orders(order_no);
+CREATE INDEX IF NOT EXISTS payment_orders_status ON payment_orders(status);
+CREATE INDEX IF NOT EXISTS payment_orders_expires_at ON payment_orders(expires_at);
+
+-- 15) Top-up Orders (充值订单)
+CREATE TABLE IF NOT EXISTS topup_orders (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE DEFAULT 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11',
+  user_id UUID NOT NULL REFERENCES users(id),
+  amount DECIMAL(20,8) NOT NULL,
+  currency TEXT NOT NULL,
+  payment_method TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','processing','completed','failed','cancelled')),
+  wallet_address TEXT,
+  tx_hash TEXT,
+  confirmed_amount DECIMAL(20,8),
+  expires_at TIMESTAMPTZ NOT NULL,
+  completed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS topup_orders_user_id ON topup_orders(user_id);
+CREATE INDEX IF NOT EXISTS topup_orders_status ON topup_orders(status);
+
+-- 16) Withdraw Orders (提现订单)
+CREATE TABLE IF NOT EXISTS withdraw_orders (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE DEFAULT 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11',
+  user_id UUID NOT NULL REFERENCES users(id),
+  amount DECIMAL(20,8) NOT NULL,
+  fee DECIMAL(20,8) NOT NULL,
+  net_amount DECIMAL(20,8) NOT NULL,
+  currency TEXT NOT NULL,
+  to_address TEXT NOT NULL,
+  method TEXT NOT NULL CHECK (method IN ('crypto','bank')),
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','processing','completed','rejected','failed')),
+  tx_hash TEXT,
+  failure_reason TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  completed_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS withdraw_orders_user_id ON withdraw_orders(user_id);
+CREATE INDEX IF NOT EXISTS withdraw_orders_status ON withdraw_orders(status);
+
+-- 17) Exchange Rates (汇率缓存)
+CREATE TABLE IF NOT EXISTS exchange_rates (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  currency TEXT NOT NULL UNIQUE,
+  usd_rate DECIMAL(20,8) NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 18) Payment Methods Config (支付方式配置)
+CREATE TABLE IF NOT EXISTS payment_methods (
+  id TEXT PRIMARY KEY,
+  type TEXT NOT NULL CHECK (type IN ('crypto','fiat','balance')),
+  name TEXT NOT NULL,
+  icon TEXT,
+  fee DECIMAL(10,4) NOT NULL DEFAULT 0,
+  min_amount DECIMAL(20,8) NOT NULL DEFAULT 0,
+  max_amount DECIMAL(20,8) NOT NULL DEFAULT 0,
+  enabled BOOLEAN NOT NULL DEFAULT true,
+  config JSONB DEFAULT '{}'
+);
