@@ -11,6 +11,7 @@ import { createMethodRouter } from "./method-router.js";
 import type { DeviceManager } from "../devices/device-manager.js";
 import type { OpenClawGatewayService } from "../openclaw/service.js";
 import type { ISessionStore } from "../sessions/session-store.js";
+import { realtimeEvents, type RealtimeEventType } from "../services/realtime-events.js";
 
 export function attachGatewayWebSocketServer(params: {
   server: http.Server;
@@ -38,8 +39,18 @@ export function attachGatewayWebSocketServer(params: {
     path: params.path,
   });
 
+  // 设置 WebSocket Server 到实时事件服务
+  realtimeEvents.setWebSocketServer(wss);
+
+  // 客户端连接管理
+  const clientSubscriptions = new Map<any, { tenantId?: string; userId?: string }>();
+
   wss.on("connection", (socket) => {
     const conn = socket as typeof socket & { _registeredDeviceId?: string };
+
+    // 注册客户端订阅信息
+    clientSubscriptions.set(socket, {});
+
     conn.on("close", () => {
       const deviceId = conn._registeredDeviceId;
       if (deviceId) {
@@ -52,6 +63,9 @@ export function attachGatewayWebSocketServer(params: {
           });
         }
       }
+      // 清理订阅
+      realtimeEvents.unsubscribe(socket as any);
+      clientSubscriptions.delete(socket);
     });
 
     socket.send(
@@ -64,8 +78,35 @@ export function attachGatewayWebSocketServer(params: {
       }),
     );
 
+    // 处理订阅消息
     socket.on("message", async (raw) => {
       const text = typeof raw === "string" ? raw : raw.toString();
+
+      // 检查是否是订阅消息
+      try {
+        const parsed = JSON.parse(text);
+        if (parsed.type === "subscribe") {
+          const { tenantId, userId } = parsed;
+          const sub = clientSubscriptions.get(socket);
+          if (sub) {
+            sub.tenantId = tenantId;
+            sub.userId = userId;
+          }
+          realtimeEvents.subscribe(socket as any, tenantId);
+          socket.send(JSON.stringify({ type: "subscribed", tenantId, userId }));
+          return;
+        }
+        if (parsed.type === "unsubscribe") {
+          realtimeEvents.unsubscribe(socket as any);
+          clientSubscriptions.delete(socket);
+          socket.send(JSON.stringify({ type: "unsubscribed" }));
+          return;
+        }
+      } catch {
+        // 不是订阅消息，继续处理 JSON-RPC
+      }
+
+      // ... 原有的 JSON-RPC 处理逻辑
 
       let parsed: unknown;
       try {
