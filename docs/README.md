@@ -37,9 +37,22 @@
 
 | 文档 | 说明 |
 |------|------|
+| [deployment-guide.md](./deployment-guide.md) | 部署指南：本地开发、Docker 部署、API 接口 |
 | [backend-postgres-setup.md](./backend-postgres-setup.md) | PostgreSQL 与网关持久化配置 |
 | [aifuturecity_architecture.md](./aifuturecity_architecture.md) | 架构说明与设计参考 |
 | [training-chat-send-troubleshooting.md](./training-chat-send-troubleshooting.md) | 训练场聊天发送问题排查 |
+
+---
+
+## 技能交易平台
+
+| 文档 | 说明 |
+|------|------|
+| [skill-marketplace-design.md](./skill-marketplace-design.md) | 技能交易平台设计方案 |
+| [skill-marketplace-architecture.md](./skill-marketplace-architecture.md) | 技能商店架构 |
+| [saas-openclaw-architecture.md](./saas-openclaw-architecture.md) | SaaS 化 OpenClaw 接入方案 |
+| [api/skill-marketplace-api.md](./api/skill-marketplace-api.md) | 技能商店 API 规范 |
+| [api/skill-marketplace-schema.md](./api/skill-marketplace-schema.md) | 数据库 Schema |
 
 ---
 

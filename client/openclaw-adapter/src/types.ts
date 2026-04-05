@@ -68,6 +68,33 @@ export type OpenClawClientConfig = {
   requestTimeoutMs?: number;
 };
 
+/** Cloud backend configuration for SaaS mode */
+export type CloudBackendConfig = {
+  /** Cloud API endpoint (e.g., https://api.aifuturecity.com) */
+  baseUrl: string;
+  /** User API Key for authentication */
+  apiKey: string;
+  /** Organization ID for multi-tenancy */
+  organizationId?: string;
+  /** Assistant ID to use */
+  assistantId?: string;
+  requestTimeoutMs?: number;
+};
+
+/** Hybrid backend configuration */
+export type HybridBackendConfig = {
+  mode: "local" | "cloud" | "auto";
+  local?: {
+    url: string;
+    token: string;
+    assistantId: string;
+  };
+  cloud?: CloudBackendConfig;
+};
+
+/** Backend type for OpenClaw adapter */
+export type BackendType = "local" | "cloud";
+
 export type DispatchTaskParams = {
   message: string;
   agentId?: string;

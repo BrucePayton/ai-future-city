@@ -3,6 +3,23 @@
  * Contract: backend-assistant-config-todo.md / frontend-api-contract.md
  */
 
+export type ConnectionConfig = {
+  /** Connection type: plugin, direct, rest */
+  type: "plugin" | "direct" | "rest";
+  /** OpenClaw URL (for direct mode) */
+  url?: string;
+  /** Gateway token (for direct mode) */
+  token?: string;
+  /** REST API URL (for rest mode) */
+  restUrl?: string;
+  /** REST API token (for rest mode) */
+  restToken?: string;
+  /** Connection status */
+  connected?: boolean;
+  /** Last connected at */
+  lastConnectedAt?: string;
+};
+
 export type PersonaConfig = {
   role?: string;
   description?: string;
@@ -37,6 +54,8 @@ export type AssistantConfigPayload = {
   costControl?: CostControlConfig;
   /** Chat evaluation pass threshold (0-100), default 80 */
   chatEvaluatePassThreshold?: number;
+  /** Connection config for device/assistant */
+  connection?: ConnectionConfig;
 };
 
 export type AssistantConfigFull = {
@@ -47,6 +66,7 @@ export type AssistantConfigFull = {
   constraints: ConstraintConfigItem[];
   costControl: CostControlConfig;
   chatEvaluatePassThreshold?: number;
+  connection?: ConnectionConfig;
 };
 
 const defaultPersona: PersonaConfig = {};
@@ -60,6 +80,7 @@ function defaultConfig(id: string, name: string): AssistantConfigFull {
     tools: [],
     constraints: [],
     costControl: { ...defaultCostControl },
+    connection: { type: "plugin" },
   };
 }
 
@@ -136,6 +157,10 @@ export class AssistantConfigStore {
         payload.chatEvaluatePassThreshold !== undefined
           ? Math.min(100, Math.max(0, Number(payload.chatEvaluatePassThreshold) || 80))
           : current.chatEvaluatePassThreshold,
+      connection:
+        payload.connection !== undefined
+          ? { ...current.connection, ...payload.connection }
+          : current.connection,
     };
     this.configs.set(id, updated);
     return updated;
