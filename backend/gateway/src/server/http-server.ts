@@ -29,9 +29,17 @@ import {
 } from "../training/training-handlers.js";
 import type { PgPool } from "../db/client.js";
 import { createMarketplaceMethods } from "../methods/marketplace.js";
+import { createTenantMethods } from "../methods/tenants.js";
+import { createMarketplaceTaskMethods } from "../methods/tasks.js";
+import { createOpenClawClusterService } from "../services/openclaw-cluster.js";
+import { createTeamTaskService } from "../services/team-task-service.js";
+import { createTeamService } from "../services/team-service.js";
+import { createTaskQueueService } from "../services/task-queue.js";
 
 const ASSISTANT_CONFIG_PATH_RE = /^\/api\/assistants\/([^/]+)\/config$/;
 const ASSISTANT_TOOLS_PATH_RE = /^\/api\/assistants\/([^/]+)\/tools$/;
+const ASSISTANT_CONNECTION_PATH_RE = /^\/api\/assistants\/([^/]+)\/connection$/;
+const ASSISTANT_TEST_CONNECTION_PATH_RE = /^\/api\/assistants\/([^/]+)\/test-connection$/;
 const ASSISTANT_TRAINING_CHAT_SEND_RE = /^\/api\/assistants\/([^/]+)\/training\/chat\/send$/;
 const ASSISTANT_TRAINING_CHAT_EVAL_RE = /^\/api\/assistants\/([^/]+)\/training\/chat\/evaluate$/;
 const ASSISTANT_TRAINING_EXEC_TEST_RE = /^\/api\/assistants\/([^/]+)\/training\/exec\/test$/;
@@ -58,8 +66,21 @@ export function createHttpServer(deps: {
 }) {
   // 创建 marketplace 方法处理器
   let marketplaceHandlers: ReturnType<typeof createMarketplaceMethods> | null = null;
+  let tenantHandlers: ReturnType<typeof createTenantMethods> | null = null;
+  let taskHandlers: ReturnType<typeof createMarketplaceTaskMethods> | null = null;
+  let openClawClusterHandlers: ReturnType<typeof createOpenClawClusterService> | null = null;
+  let teamHandlers: ReturnType<typeof createTeamService> | null = null;
+  let taskQueueHandlers: ReturnType<typeof createTaskQueueService> | null = null;
+  let teamTaskHandlers: ReturnType<typeof createTeamTaskService> | null = null;
+
   if (deps.pool) {
     marketplaceHandlers = createMarketplaceMethods({ pool: deps.pool });
+    tenantHandlers = createTenantMethods({ pool: deps.pool });
+    taskHandlers = createMarketplaceTaskMethods({ pool: deps.pool });
+    openClawClusterHandlers = createOpenClawClusterService({ pool: deps.pool });
+    teamHandlers = createTeamService({ pool: deps.pool });
+    taskQueueHandlers = createTaskQueueService({ pool: deps.pool });
+    teamTaskHandlers = createTeamTaskService({ pool: deps.pool });
   }
   return http.createServer((req, res) => {
     setCorsHeaders(res);
@@ -146,6 +167,20 @@ export function createHttpServer(deps: {
     const toolsMatch = path.match(ASSISTANT_TOOLS_PATH_RE);
     if (toolsMatch && req.method === "GET") {
       void handleTrainingTools(req, res, toolsMatch[1], deps);
+      return;
+    }
+
+    // Connection config: POST /api/assistants/:id/connection
+    const connectionMatch = path.match(ASSISTANT_CONNECTION_PATH_RE);
+    if (connectionMatch && req.method === "POST") {
+      void handleConnection(req, res, connectionMatch[1], deps);
+      return;
+    }
+
+    // Test connection: POST /api/assistants/:id/test-connection
+    const testConnectionMatch = path.match(ASSISTANT_TEST_CONNECTION_PATH_RE);
+    if (testConnectionMatch && req.method === "POST") {
+      void handleTestConnection(req, res, testConnectionMatch[1], deps);
       return;
     }
 
@@ -390,6 +425,576 @@ export function createHttpServer(deps: {
         }, res);
         return;
       }
+
+      // ========================================
+      // Tenant API (多租户)
+      // ========================================
+
+      // Create tenant
+      if (req.method === "POST" && req.url === "/api/tenants") {
+        void handleJsonBody(req, async (body) => {
+          return tenantHandlers!["tenants.create"](body);
+        }, res);
+        return;
+      }
+
+      // List tenants
+      if (req.method === "GET" && req.url === "/api/tenants") {
+        void respondJson(res, 200, async () => {
+          return tenantHandlers!["tenants.list"]({});
+        });
+        return;
+      }
+
+      // Get tenant by ID
+      const tenantByIdMatch = req.url?.match(/^\/api\/tenants\/([a-f0-9-]+)$/);
+      if (tenantByIdMatch && req.method === "GET") {
+        void respondJson(res, 200, async () => {
+          return tenantHandlers!["tenants.get"]({ id: tenantByIdMatch[1] });
+        });
+        return;
+      }
+
+      // Update tenant
+      if (tenantByIdMatch && req.method === "PATCH") {
+        void handleJsonBody(req, async (body) => {
+          return tenantHandlers!["tenants.update"]({ id: tenantByIdMatch[1], ...body });
+        }, res);
+        return;
+      }
+
+      // Configure tenant OpenClaw
+      if (tenantByIdMatch && req.method === "POST" && req.url?.endsWith("/openclaw")) {
+        void handleJsonBody(req, async (body) => {
+          return tenantHandlers!["tenants.configureOpenClaw"]({ tenantId: tenantByIdMatch[1], config: body });
+        }, res);
+        return;
+      }
+
+      // Get tenant OpenClaw status
+      if (req.url?.match(/^\/api\/tenants\/([a-f0-9-]+)\/openclaw$/) && req.method === "GET") {
+        const match = req.url.match(/^\/api\/tenants\/([a-f0-9-]+)\/openclaw$/);
+        void respondJson(res, 200, async () => {
+          return tenantHandlers!["tenants.getOpenClawStatus"]({ tenantId: match![1] });
+        });
+        return;
+      }
+
+      // Add user to tenant
+      if (req.method === "POST" && req.url?.match(/^\/api\/tenants\/[a-f0-9-]+\/users$/)) {
+        const match = req.url.match(/^\/api\/tenants\/([a-f0-9-]+)\/users$/);
+        void handleJsonBody(req, async (body) => {
+          return tenantHandlers!["tenants.addUser"]({ tenantId: match![1], ...body });
+        }, res);
+        return;
+      }
+
+      // List tenant users
+      if (req.method === "GET" && req.url?.match(/^\/api\/tenants\/[a-f0-9-]+\/users$/)) {
+        const match = req.url.match(/^\/api\/tenants\/([a-f0-9-]+)\/users$/);
+        void respondJson(res, 200, async () => {
+          return tenantHandlers!["tenants.listUsers"]({ tenantId: match![1] });
+        });
+        return;
+      }
+
+      // ========================================
+      // Task API (任务派发)
+      // ========================================
+
+      // Create task
+      if (req.method === "POST" && req.url === "/api/tasks") {
+        void handleJsonBody(req, async (body) => {
+          return taskHandlers!["marketplace.tasks.create"](body);
+        }, res);
+        return;
+      }
+
+      // List tasks
+      if (req.method === "GET" && req.url === "/api/tasks") {
+        void respondJson(res, 200, async () => {
+          return taskHandlers!["marketplace.tasks.list"]({});
+        });
+        return;
+      }
+
+      // Get available tasks (抢单大厅)
+      if (req.method === "GET" && req.url === "/api/tasks/available") {
+        void respondJson(res, 200, async () => {
+          return taskHandlers!["marketplace.tasks.available"]({});
+        });
+        return;
+      }
+
+      // Get task by ID
+      const taskByIdMatch = req.url?.match(/^\/api\/tasks\/([a-f0-9-]+)$/);
+      if (taskByIdMatch && req.method === "GET") {
+        void respondJson(res, 200, async () => {
+          return taskHandlers!["marketplace.tasks.list"]({ taskId: taskByIdMatch[1] });
+        });
+        return;
+      }
+
+      // Claim task (抢单)
+      if (taskByIdMatch && req.method === "POST" && req.url?.endsWith("/claim")) {
+        void handleJsonBody(req, async (body) => {
+          return taskHandlers!["marketplace.tasks.claim"]({ id: taskByIdMatch[1], ...body });
+        }, res);
+        return;
+      }
+
+      // Assign task (派单)
+      if (taskByIdMatch && req.method === "POST" && req.url?.endsWith("/assign")) {
+        void handleJsonBody(req, async (body) => {
+          return taskHandlers!["marketplace.tasks.assign"]({ id: taskByIdMatch[1], ...body });
+        }, res);
+        return;
+      }
+
+      // Match task (智能匹配)
+      if (taskByIdMatch && req.method === "POST" && req.url?.endsWith("/match")) {
+        void handleJsonBody(req, async (body) => {
+          return taskHandlers!["marketplace.tasks.match"]({ id: taskByIdMatch[1], ...body });
+        }, res);
+        return;
+      }
+
+      // Update task status
+      if (taskByIdMatch && req.method === "PATCH") {
+        void handleJsonBody(req, async (body) => {
+          return taskHandlers!["marketplace.tasks.updateStatus"]({ id: taskByIdMatch[1], ...body });
+        }, res);
+        return;
+      }
+
+      // ========================================
+      // Team API (临时组队)
+      // ========================================
+
+      // Create team
+      if (req.method === "POST" && req.url === "/api/teams") {
+        void handleJsonBody(req, async (body) => {
+          const { name, ownerId, description, taskId, maxMembers, tenantId } = body as Record<string, unknown>;
+          return teamHandlers?.["createTeam"]?.({
+            name: String(name),
+            ownerId: String(ownerId),
+            description: description ? String(description) : undefined,
+            taskId: taskId ? String(taskId) : undefined,
+            maxMembers: maxMembers ? Number(maxMembers) : undefined,
+            tenantId: tenantId ? String(tenantId) : undefined,
+          }) ?? { error: "Not configured" };
+        }, res);
+        return;
+      }
+
+      // List user teams
+      if (req.method === "GET" && req.url === "/api/teams") {
+        void handleJsonBody(req, async (body) => {
+          const { userId } = body as Record<string, unknown>;
+          return teamHandlers?.["listUserTeams"]?.(String(userId)) ?? { error: "Not configured" };
+        }, res);
+        return;
+      }
+
+      // Join by invite code
+      if (req.method === "POST" && req.url === "/api/teams/join") {
+        void handleJsonBody(req, async (body) => {
+          const { inviteCode, userId } = body as Record<string, unknown>;
+          return teamHandlers?.["joinByCode"]?.(String(inviteCode), String(userId)) ?? { error: "Not configured" };
+        }, res);
+        return;
+      }
+
+      // Get team details
+      const teamByIdMatch = req.url?.match(/^\/api\/teams\/([a-f0-9-]+)$/);
+      if (teamByIdMatch && req.method === "GET") {
+        void respondJson(res, 200, async () => {
+          return teamHandlers?.["getTeam"]?.(teamByIdMatch[1]) ?? { error: "Not configured" };
+        });
+        return;
+      }
+
+      // Update team
+      if (teamByIdMatch && req.method === "PATCH") {
+        void handleJsonBody(req, async (body) => {
+          const { name, description } = body as Record<string, unknown>;
+          return teamHandlers?.["updateTeam"]?.(teamByIdMatch[1], {
+            name: name ? String(name) : undefined,
+            description: description ? String(description) : undefined,
+          }, "") ?? { error: "Not configured" };
+        }, res);
+        return;
+      }
+
+      // Dissolve team
+      if (teamByIdMatch && req.method === "DELETE") {
+        void handleJsonBody(req, async (body) => {
+          const { userId } = body as Record<string, unknown>;
+          return teamHandlers?.["dissolveTeam"]?.(teamByIdMatch[1], String(userId)) ?? { error: "Not configured" };
+        }, res);
+        return;
+      }
+
+      // List team members
+      if (req.url?.match(/^\/api\/teams\/[a-f0-9-]+\/members$/) && req.method === "GET") {
+        const match = req.url.match(/^\/api\/teams\/([a-f0-9-]+)\/members$/);
+        void respondJson(res, 200, async () => {
+          return teamHandlers?.["listMembers"]?.(match![1]) ?? { error: "Not configured" };
+        });
+        return;
+      }
+
+      // Invite member
+      if (req.url?.match(/^\/api\/teams\/[a-f0-9-]+\/members$/) && req.method === "POST") {
+        const match = req.url.match(/^\/api\/teams\/([a-f0-9-]+)\/members$/);
+        void handleJsonBody(req, async (body) => {
+          const { userId, role } = body as Record<string, unknown>;
+          return teamHandlers?.["inviteMember"]?.({
+            teamId: match![1],
+            userId: String(userId),
+            role: role as "owner" | "admin" | "member" | undefined,
+          }) ?? { error: "Not configured" };
+        }, res);
+        return;
+      }
+
+      // Leave team
+      if (req.url?.match(/^\/api\/teams\/[a-f0-9-]+\/leave$/) && req.method === "POST") {
+        const match = req.url.match(/^\/api\/teams\/([a-f0-9-]+)\/leave$/);
+        void handleJsonBody(req, async (body) => {
+          const { userId } = body as Record<string, unknown>;
+          return teamHandlers?.["leaveTeam"]?.(match![1], String(userId)) ?? { error: "Not configured" };
+        }, res);
+        return;
+      }
+
+      // Transfer ownership
+      if (teamByIdMatch && req.method === "POST" && req.url?.endsWith("/transfer")) {
+        void handleJsonBody(req, async (body) => {
+          const { currentOwnerId, newOwnerId } = body as Record<string, unknown>;
+          return teamHandlers?.["transferOwnership"]?.(teamByIdMatch[1], String(currentOwnerId), String(newOwnerId)) ?? { error: "Not configured" };
+        }, res);
+        return;
+      }
+
+      // Remove member
+      if (req.url?.match(/^\/api\/teams\/[a-f0-9-]+\/members\/[^/]+$/) && req.method === "DELETE") {
+        const teamMatch = req.url.match(/^\/api\/teams\/([a-f0-9-]+)\/members\/([^/]+)$/);
+        void handleJsonBody(req, async (body) => {
+          const { requesterId } = body as Record<string, unknown>;
+          return teamHandlers?.["removeMember"]?.(teamMatch![1], teamMatch![2], String(requesterId)) ?? { error: "Not configured" };
+        }, res);
+        return;
+      }
+
+      // Accept invite
+      if (req.url?.match(/^\/api\/teams\/[a-f0-9-]+\/accept$/) && req.method === "POST") {
+        const match = req.url.match(/^\/api\/teams\/([a-f0-9-]+)\/accept$/);
+        void handleJsonBody(req, async (body) => {
+          const { userId } = body as Record<string, unknown>;
+          return teamHandlers?.["acceptInvite"]?.(match![1], String(userId)) ?? { error: "Not configured" };
+        }, res);
+        return;
+      }
+
+      // ========================================
+      // Task Queue API
+      // ========================================
+
+      // Enqueue task
+      if (req.method === "POST" && req.url === "/api/queue") {
+        void handleJsonBody(req, async (body) => {
+          const { type, payload, priority, scheduledAt, maxRetries, tenantId } = body as Record<string, unknown>;
+          return taskQueueHandlers?.["enqueue"]?.({
+            type: String(type) as any,
+            payload: payload as Record<string, unknown>,
+            priority: priority ? Number(priority) : undefined,
+            scheduledAt: scheduledAt ? new Date(String(scheduledAt)) : undefined,
+            maxRetries: maxRetries ? Number(maxRetries) : undefined,
+            tenantId: tenantId ? String(tenantId) : undefined,
+          }) ?? { error: "Not configured" };
+        }, res);
+        return;
+      }
+
+      // Get queue status
+      const queueStatusMatch = req.url?.match(/^\/api\/queue\/([a-f0-9-]+)$/);
+      if (queueStatusMatch && req.method === "GET") {
+        void respondJson(res, 200, async () => {
+          return taskQueueHandlers?.["getStatus"]?.(queueStatusMatch[1]) ?? { error: "Not configured" };
+        });
+        return;
+      }
+
+      // List queue tasks
+      if (req.method === "GET" && req.url === "/api/queue") {
+        void handleJsonBody(req, async (body) => {
+          const { tenantId, status, limit, offset } = body as Record<string, unknown>;
+          return taskQueueHandlers?.["list"]?.(
+            tenantId ? String(tenantId) : undefined,
+            status ? String(status) as any : undefined,
+            limit ? Number(limit) : 20,
+            offset ? Number(offset) : 0,
+          ) ?? { error: "Not configured" };
+        }, res);
+        return;
+      }
+
+      // Get queue stats
+      if (req.method === "GET" && req.url === "/api/queue/stats") {
+        void handleJsonBody(req, async (body) => {
+          const { tenantId } = body as Record<string, unknown>;
+          return taskQueueHandlers?.["getStats"]?.(tenantId ? String(tenantId) : undefined) ?? { error: "Not configured" };
+        }, res);
+        return;
+      }
+
+      // Cancel queue task
+      if (queueStatusMatch && req.method === "DELETE") {
+        void handleJsonBody(req, async () => {
+          return taskQueueHandlers?.["cancel"]?.(queueStatusMatch[1]) ?? { error: "Not configured" };
+        }, res);
+        return;
+      }
+
+      // Process next task (for workers)
+      if (req.method === "POST" && req.url === "/api/queue/process") {
+        void handleJsonBody(req, async (body) => {
+          const { tenantId } = body as Record<string, unknown>;
+          return taskQueueHandlers?.["processNext"]?.(tenantId ? String(tenantId) : undefined) ?? { error: "Not configured" };
+        }, res);
+        return;
+      }
+
+      // ========================================
+      // OpenClaw Cluster API
+      // ========================================
+
+      // Register cluster instance
+      if (req.method === "POST" && req.url === "/api/cluster/instances") {
+        void handleJsonBody(req, async (body) => {
+          const { name, type, url, token, capacity, region, tenantId } = body as Record<string, unknown>;
+          return openClawClusterHandlers?.["registerInstance"]?.({
+            name: String(name),
+            type: String(type) as any,
+            url: String(url),
+            token: token ? String(token) : undefined,
+            capacity: capacity ? Number(capacity) : undefined,
+            region: region ? String(region) : undefined,
+            tenantId: tenantId ? String(tenantId) : undefined,
+          }) ?? { error: "Not configured" };
+        }, res);
+        return;
+      }
+
+      // List cluster instances
+      if (req.method === "GET" && req.url === "/api/cluster/instances") {
+        void handleJsonBody(req, async (body) => {
+          const { tenantId, status } = body as Record<string, unknown>;
+          return openClawClusterHandlers?.["listInstances"]?.(
+            tenantId ? String(tenantId) : undefined,
+            status ? String(status) as any : undefined,
+          ) ?? { error: "Not configured" };
+        }, res);
+        return;
+      }
+
+      // Get cluster instance by ID
+      const clusterInstanceMatch = req.url?.match(/^\/api\/cluster\/instances\/([a-f0-9-]+)$/);
+      if (clusterInstanceMatch && req.method === "GET") {
+        void respondJson(res, 200, async () => {
+          const instances = await openClawClusterHandlers?.["listInstances"]?.() ?? [];
+          const instance = (instances as any[]).find((i: any) => i.id === clusterInstanceMatch[1]);
+          return instance ?? { error: "Not found" };
+        });
+        return;
+      }
+
+      // Cluster instance heartbeat
+      if (clusterInstanceMatch && req.method === "POST" && req.url?.endsWith("/heartbeat")) {
+        void handleJsonBody(req, async () => {
+          return openClawClusterHandlers?.["heartbeat"]?.(clusterInstanceMatch[1]) ?? { error: "Not configured" };
+        }, res);
+        return;
+      }
+
+      // Update instance load
+      if (clusterInstanceMatch && req.method === "POST" && req.url?.endsWith("/load")) {
+        void handleJsonBody(req, async (body) => {
+          const { load } = body as Record<string, unknown>;
+          return openClawClusterHandlers?.["updateLoad"]?.(clusterInstanceMatch[1], Number(load)) ?? { error: "Not configured" };
+        }, res);
+        return;
+      }
+
+      // Get cluster stats
+      if (req.method === "GET" && req.url === "/api/cluster/stats") {
+        void handleJsonBody(req, async (body) => {
+          const { tenantId } = body as Record<string, unknown>;
+          return openClawClusterHandlers?.["getClusterStats"]?.(tenantId ? String(tenantId) : undefined) ?? { error: "Not configured" };
+        }, res);
+        return;
+      }
+
+      // Get available instance (for task assignment)
+      if (req.method === "GET" && req.url === "/api/cluster/available") {
+        void handleJsonBody(req, async (body) => {
+          const { tenantId } = body as Record<string, unknown>;
+          return openClawClusterHandlers?.["getAvailableInstance"]?.(tenantId ? String(tenantId) : undefined) ?? { error: "Not configured" };
+        }, res);
+        return;
+      }
+
+      // Assign task to instance
+      if (req.method === "POST" && req.url === "/api/cluster/assign") {
+        void handleJsonBody(req, async (body) => {
+          const { requiredSkills, preferredRegion } = body as Record<string, unknown>;
+          return openClawClusterHandlers?.["assignTask"]?.(
+            requiredSkills ? (requiredSkills as string[]) : undefined,
+            preferredRegion ? String(preferredRegion) : undefined,
+          ) ?? { error: "Not configured" };
+        }, res);
+        return;
+      }
+
+      // Release task from instance
+      if (req.method === "POST" && req.url === "/api/cluster/release") {
+        void handleJsonBody(req, async (body) => {
+          const { instanceId } = body as Record<string, unknown>;
+          return openClawClusterHandlers?.["releaseTask"]?.(String(instanceId)) ?? { error: "Not configured" };
+        }, res);
+        return;
+      }
+
+      // Deregister instance
+      if (clusterInstanceMatch && req.method === "DELETE") {
+        void handleJsonBody(req, async () => {
+          return openClawClusterHandlers?.["deregister"]?.(clusterInstanceMatch[1]) ?? { error: "Not configured" };
+        }, res);
+        return;
+      }
+
+      // Set instance status
+      if (clusterInstanceMatch && req.method === "PATCH") {
+        void handleJsonBody(req, async (body) => {
+          const { status } = body as Record<string, unknown>;
+          return openClawClusterHandlers?.["setStatus"]?.(clusterInstanceMatch[1], String(status) as any) ?? { error: "Not configured" };
+        }, res);
+        return;
+      }
+
+      // ========================================
+      // Team Task API (任务拆分)
+      // ========================================
+
+      // Create subtask
+      if (req.method === "POST" && req.url === "/api/subtasks") {
+        void handleJsonBody(req, async (body) => {
+          const { taskId, title, description, assigneeId, priority, orderIndex } = body as Record<string, unknown>;
+          return teamTaskHandlers?.["createSubtask"]?.({
+            taskId: String(taskId),
+            title: String(title),
+            description: description ? String(description) : undefined,
+            assigneeId: assigneeId ? String(assigneeId) : undefined,
+            priority: priority ? Number(priority) : undefined,
+            orderIndex: orderIndex ? Number(orderIndex) : undefined,
+          }) ?? { error: "Not configured" };
+        }, res);
+        return;
+      }
+
+      // Batch create subtasks
+      if (req.method === "POST" && req.url === "/api/subtasks/batch") {
+        void handleJsonBody(req, async (body) => {
+          const { taskId, subtasks } = body as Record<string, unknown>;
+          const parsedSubtasks = (subtasks as Array<Record<string, unknown>>)?.map(s => ({
+            title: String(s.title),
+            description: s.description ? String(s.description) : undefined,
+            assigneeId: s.assigneeId ? String(s.assigneeId) : undefined,
+            priority: s.priority ? Number(s.priority) : undefined,
+          })) ?? [];
+          return teamTaskHandlers?.["createSubtasks"]?.(String(taskId), parsedSubtasks) ?? { error: "Not configured" };
+        }, res);
+        return;
+      }
+
+      // Get subtasks by task
+      const subtasksByTaskMatch = req.url?.match(/^\/api\/tasks\/([a-f0-9-]+)\/subtasks$/);
+      if (subtasksByTaskMatch && req.method === "GET") {
+        void respondJson(res, 200, async () => {
+          return teamTaskHandlers?.["listSubtasks"]?.(subtasksByTaskMatch[1]) ?? { error: "Not configured" };
+        });
+        return;
+      }
+
+      // Get task progress
+      if (req.url?.match(/^\/api\/tasks\/[a-f0-9-]+\/progress$/) && req.method === "GET") {
+        const match = req.url.match(/^\/api\/tasks\/([a-f0-9-]+)\/progress$/);
+        void respondJson(res, 200, async () => {
+          return teamTaskHandlers?.["getTaskProgress"]?.(match![1]) ?? { error: "Not configured" };
+        });
+        return;
+      }
+
+      // Get subtask by ID
+      const subtaskByIdMatch = req.url?.match(/^\/api\/subtasks\/([a-f0-9-]+)$/);
+      if (subtaskByIdMatch) {
+        if (req.method === "GET") {
+          void respondJson(res, 200, async () => {
+            return teamTaskHandlers?.["getSubtask"]?.(subtaskByIdMatch[1]) ?? { error: "Not configured" };
+          });
+          return;
+        }
+        if (req.method === "PATCH" || req.method === "PUT") {
+          void handleJsonBody(req, async (body) => {
+            const { title, description, assigneeId, status, priority, orderIndex, result } = body as Record<string, unknown>;
+            return teamTaskHandlers?.["updateSubtask"]?.(subtaskByIdMatch[1], {
+              title: title ? String(title) : undefined,
+              description: description !== undefined ? String(description) : undefined,
+              assigneeId: assigneeId !== undefined ? String(assigneeId) : undefined,
+              status: status ? String(status) as any : undefined,
+              priority: priority ? Number(priority) : undefined,
+              orderIndex: orderIndex ? Number(orderIndex) : undefined,
+              result: result as Record<string, unknown> | undefined,
+            }) ?? { error: "Not configured" };
+          }, res);
+          return;
+        }
+        if (req.method === "DELETE") {
+          void handleJsonBody(req, async (body) => {
+            const { userId } = body as Record<string, unknown>;
+            return teamTaskHandlers?.["deleteSubtask"]?.(subtaskByIdMatch[1], userId ? String(userId) : undefined) ?? { error: "Not configured" };
+          }, res);
+          return;
+        }
+      }
+
+      // Assign subtask
+      if (subtaskByIdMatch && req.method === "POST" && req.url?.endsWith("/assign")) {
+        void handleJsonBody(req, async (body) => {
+          const { userId } = body as Record<string, unknown>;
+          return teamTaskHandlers?.["assignSubtask"]?.(subtaskByIdMatch[1], String(userId)) ?? { error: "Not configured" };
+        }, res);
+        return;
+      }
+
+      // Complete subtask
+      if (subtaskByIdMatch && req.method === "POST" && req.url?.endsWith("/complete")) {
+        void handleJsonBody(req, async (body) => {
+          const { result } = body as Record<string, unknown>;
+          return teamTaskHandlers?.["completeSubtask"]?.(subtaskByIdMatch[1], result as Record<string, unknown> | undefined) ?? { error: "Not configured" };
+        }, res);
+        return;
+      }
+
+      // Get user subtasks
+      if (req.method === "GET" && req.url === "/api/my/subtasks") {
+        void handleJsonBody(req, async (body) => {
+          const { userId, status } = body as Record<string, unknown>;
+          return teamTaskHandlers?.["getUserSubtasks"]?.(String(userId), status ? String(status) as any : undefined) ?? { error: "Not configured" };
+        }, res);
+        return;
+      }
     }
 
     writeError(res, 404, "Not Found", "NOT_FOUND");
@@ -480,6 +1085,164 @@ async function handleRegisterAssistant(
   await deps.persistAssistantsData?.();
   res.writeHead(200, { "Content-Type": "application/json" });
   res.end(JSON.stringify({ ok: true, id: body.id }));
+}
+
+/**
+ * Handle POST /api/assistants/:id/connection - Save connection config
+ */
+async function handleConnection(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  assistantId: string,
+  deps: {
+    assistantConfig: AssistantConfigStore;
+    persistAssistantsData?: () => void | Promise<void>;
+  },
+): Promise<void> {
+  setCorsHeaders(res);
+  let body: {
+    type?: string;
+    url?: string;
+    token?: string;
+    restUrl?: string;
+    restToken?: string;
+  };
+  try {
+    const raw = await readRequestBody(req);
+    body = JSON.parse(raw);
+  } catch {
+    writeError(res, 400, "Invalid JSON body", "INVALID_BODY");
+    return;
+  }
+
+  // Validate connection type
+  const validTypes = ["plugin", "direct", "rest"];
+  const connectionType = validTypes.includes(body.type ?? "") ? body.type : "plugin";
+
+  // Get existing config or default
+  const existingConfig = deps.assistantConfig.get(assistantId);
+  const assistantName = existingConfig?.name ?? assistantId;
+
+  // Update connection config
+  const updated = deps.assistantConfig.update(assistantId, assistantName, {
+    connection: {
+      type: connectionType as "plugin" | "direct" | "rest",
+      url: body.url,
+      token: body.token,
+      restUrl: body.restUrl,
+      restToken: body.restToken,
+    },
+  });
+
+  await deps.persistAssistantsData?.();
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ ok: true, connection: updated.connection }));
+}
+
+/**
+ * Handle POST /api/assistants/:id/test-connection - Test connection
+ */
+async function handleTestConnection(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  assistantId: string,
+  deps: {
+    assistantConfig: AssistantConfigStore;
+  },
+): Promise<void> {
+  setCorsHeaders(res);
+  let body: {
+    type?: string;
+    url?: string;
+    token?: string;
+    restUrl?: string;
+    restToken?: string;
+  };
+  try {
+    const raw = await readRequestBody(req);
+    body = JSON.parse(raw);
+  } catch {
+    writeError(res, 400, "Invalid JSON body", "INVALID_BODY");
+    return;
+  }
+
+  const connectionType = body.type ?? "direct";
+
+  try {
+    if (connectionType === "rest") {
+      // Test REST API connection
+      const restUrl = body.restUrl;
+      const restToken = body.restToken;
+      if (!restUrl) {
+        writeError(res, 400, "Missing REST URL", "INVALID_BODY");
+        return;
+      }
+
+      // Simple health check to REST endpoint
+      const response = await fetch(`${restUrl}/v1/models`, {
+        headers: restToken ? { Authorization: `Bearer ${restToken}` } : {},
+      });
+
+      if (response.ok) {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+          ok: true,
+          type: "rest",
+          message: "REST API connection successful",
+          agents: ["Available via REST (limited)"],
+        }));
+      } else {
+        writeError(res, 400, `REST API error: ${response.status}`, "CONNECTION_FAILED");
+      }
+      return;
+    }
+
+    // For direct mode, try WebSocket connection
+    const url = body.url;
+    const token = body.token;
+    if (!url) {
+      writeError(res, 400, "Missing OpenClaw URL", "INVALID_BODY");
+      return;
+    }
+
+    // Import dynamically to avoid circular deps
+    const { OpenClawAdapter } = await import("@aifc/client-openclaw-adapter");
+    const adapter = new OpenClawAdapter({
+      url,
+      token: token ?? "",
+      assistantId,
+      requestTimeoutMs: 10000,
+    });
+
+    try {
+      const hello = await adapter.connect();
+      adapter.disconnect();
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({
+        ok: true,
+        type: "direct",
+        message: "OpenClaw connection successful",
+        hello: {
+          protocol: hello.protocol,
+          server: hello.server,
+        },
+      }));
+    } catch (err) {
+      writeError(
+        res,
+        400,
+        `Connection failed: ${err instanceof Error ? err.message : String(err)}`,
+        "CONNECTION_FAILED",
+      );
+    }
+  } catch (err) {
+    writeError(
+      res,
+      500,
+      `Test failed: ${err instanceof Error ? err.message : String(err)}`,
+      "INTERNAL_ERROR",
+    );
+  }
 }
 
 function readRequestBody(req: http.IncomingMessage): Promise<string> {
