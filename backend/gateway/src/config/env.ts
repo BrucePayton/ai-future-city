@@ -6,6 +6,8 @@ export type GatewayEnv = {
   nodeEnv: string;
   openClaw: {
     enabled: boolean;
+    /** Connection mode: local, cloud, or hybrid (auto) */
+    mode: "local" | "cloud" | "hybrid";
     /** Outbound: gateway connects to OpenClaw (OPENCLAW_LOCAL_URL + token) */
     url?: string;
     token?: string;
@@ -18,6 +20,12 @@ export type GatewayEnv = {
     assistantId: string;
     defaultAgentId: string;
     requestTimeoutMs: number;
+    /** Cloud backend configuration */
+    cloud?: {
+      baseUrl: string;
+      apiKey: string;
+      organizationId?: string;
+    };
   };
   payment: {
     enabled: boolean;
@@ -38,6 +46,20 @@ export function loadGatewayEnv(): GatewayEnv {
   const inboundToken = process.env.OPENCLAW_INBOUND_TOKEN ?? process.env.OPENCLAW_LOCAL_TOKEN;
   const hasInbound = Boolean(inboundToken);
 
+  // Check cloud mode configuration
+  const cloudMode = process.env.AIFC_CLOUD_MODE === "true" || process.env.AIFC_CLOUD_MODE === "1";
+  const hasCloudConfig = Boolean(process.env.AIFC_API_KEY && process.env.AIFC_CLOUD_URL);
+
+  // Determine connection mode
+  let mode: "local" | "cloud" | "hybrid" = "local";
+  if (cloudMode && hasCloudConfig) {
+    mode = "cloud";
+  } else if (hasCloudConfig && hasOutbound) {
+    mode = "hybrid";
+  } else if (cloudMode) {
+    mode = "cloud";
+  }
+
   const paymentEnabled = Boolean(
     process.env.ESCROW_CONTRACT_ADDRESS &&
     process.env.ESCROW_PRIVATE_KEY &&
@@ -50,7 +72,8 @@ export function loadGatewayEnv(): GatewayEnv {
     wsPath: process.env.AIFC_GATEWAY_WS_PATH ?? "/ws",
     nodeEnv: process.env.NODE_ENV ?? "development",
     openClaw: {
-      enabled: hasOutbound || hasInbound,
+      enabled: hasOutbound || hasInbound || hasCloudConfig,
+      mode,
       url: process.env.OPENCLAW_LOCAL_URL,
       token: process.env.OPENCLAW_LOCAL_TOKEN,
       platformUrl: process.env.OPENCLAW_PLATFORM_URL,
@@ -61,6 +84,13 @@ export function loadGatewayEnv(): GatewayEnv {
       assistantId: process.env.OPENCLAW_GATEWAY_ASSISTANT_ID ?? "aifc-gateway",
       defaultAgentId: process.env.OPENCLAW_LOCAL_AGENT_ID ?? "default",
       requestTimeoutMs: Number.parseInt(process.env.OPENCLAW_REQUEST_TIMEOUT_MS ?? "20000", 10),
+      cloud: hasCloudConfig
+        ? {
+            baseUrl: process.env.AIFC_CLOUD_URL!,
+            apiKey: process.env.AIFC_API_KEY!,
+            organizationId: process.env.AIFC_ORGANIZATION_ID,
+          }
+        : undefined,
     },
     payment: {
       enabled: paymentEnabled,

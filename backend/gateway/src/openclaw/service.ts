@@ -1,11 +1,20 @@
 import { randomUUID } from "node:crypto";
 
-import { OpenClawAdapter } from "@aifc/client-openclaw-adapter";
+import {
+  CloudBackend,
+  HybridBackend,
+  OpenClawAdapter,
+  createHybridBackend,
+  type CloudBackendConfig,
+} from "@aifc/client-openclaw-adapter";
 
 import type { InboundOpenClawRegistry } from "./inbound-registry.js";
 
 type OpenClawServiceOptions = {
   enabled: boolean;
+  /** Connection mode: local, cloud, or hybrid (auto-failover) */
+  mode: "local" | "cloud" | "hybrid";
+  /** Local outbound: gateway connects to OpenClaw (OPENCLAW_LOCAL_URL + token) */
   url?: string;
   token?: string;
   /** Optional: platform-persona OpenClaw for training (e.g. ws://localhost:18790) */
@@ -15,16 +24,24 @@ type OpenClawServiceOptions = {
   assistantId: string;
   defaultAgentId: string;
   requestTimeoutMs: number;
+  /** Cloud backend configuration */
+  cloud?: CloudBackendConfig;
 };
 
 export class OpenClawGatewayService {
   private adapter: OpenClawAdapter | null = null;
   private platformAdapter: OpenClawAdapter | null = null;
+  private cloudAdapter: CloudBackend | null = null;
+  private hybridAdapter: HybridBackend | null = null;
 
   constructor(private readonly options: OpenClawServiceOptions) {}
 
   isEnabled(): boolean {
     return this.options.enabled;
+  }
+
+  getMode(): "local" | "cloud" | "hybrid" {
+    return this.options.mode;
   }
 
   /** Agent id used for dispatch/chat when caller omits assistantId. */
@@ -45,8 +62,10 @@ export class OpenClawGatewayService {
   async getStatus(): Promise<{
     enabled: boolean;
     connected: boolean;
-    source?: "outbound" | "inbound";
+    source?: "outbound" | "inbound" | "cloud" | "hybrid";
+    mode?: "local" | "cloud" | "hybrid";
     url?: string;
+    cloudUrl?: string;
     platformConnected?: boolean;
     platformUrl?: string;
     platformHello?: unknown;
@@ -70,12 +89,66 @@ export class OpenClawGatewayService {
         enabled: true,
         connected: true,
         source: "inbound",
+        mode: this.options.mode,
         assistantId: conn!.assistantId,
         defaultAgentId: conn!.defaultAgentId,
         hello: { type: "inbound", registeredAt: conn!.registeredAt },
       };
     }
 
+    // Check if cloud mode is configured
+    const isCloudMode = this.options.mode === "cloud" || this.options.mode === "hybrid";
+    const hasCloudConfig = Boolean(this.options.cloud?.baseUrl && this.options.cloud?.apiKey);
+
+    // Handle cloud mode
+    if (isCloudMode && hasCloudConfig) {
+      try {
+        const cloudAdapter = await this.getCloudAdapter();
+        const hello = await cloudAdapter.connect();
+        return {
+          enabled: true,
+          connected: cloudAdapter.connected,
+          source: "cloud",
+          mode: this.options.mode,
+          cloudUrl: this.options.cloud?.baseUrl,
+          assistantId: this.options.assistantId,
+          defaultAgentId: this.options.defaultAgentId,
+          hello,
+        };
+      } catch (error) {
+        // If hybrid mode and cloud fails, try local
+        if (this.options.mode === "hybrid" && this.options.url && this.options.token) {
+          try {
+            const adapter = await this.getAdapter();
+            const hello = await adapter.connect();
+            return {
+              enabled: true,
+              connected: adapter.connected,
+              source: "outbound",
+              mode: this.options.mode,
+              url: this.options.url,
+              assistantId: this.options.assistantId,
+              defaultAgentId: this.options.defaultAgentId,
+              hello,
+            };
+          } catch {
+            // Both failed
+          }
+        }
+        return {
+          enabled: true,
+          connected: false,
+          source: "cloud",
+          mode: this.options.mode,
+          cloudUrl: this.options.cloud?.baseUrl,
+          assistantId: this.options.assistantId,
+          defaultAgentId: this.options.defaultAgentId,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    }
+
+    // Local mode
     try {
       const adapter = await this.getAdapter();
       const hello = await adapter.connect();
@@ -281,6 +354,8 @@ export class OpenClawGatewayService {
   async disconnect(): Promise<void> {
     this.platformAdapter?.disconnect();
     this.platformAdapter = null;
+    this.cloudAdapter?.disconnect();
+    this.cloudAdapter = null;
     this.adapter?.disconnect();
     this.adapter = null;
   }
@@ -309,6 +384,22 @@ export class OpenClawGatewayService {
       });
     }
     return this.adapter;
+  }
+
+  private async getCloudAdapter(): Promise<CloudBackend> {
+    if (!this.options.cloud?.baseUrl || !this.options.cloud?.apiKey) {
+      throw new Error("Cloud backend not configured. Set AIFC_CLOUD_URL and AIFC_API_KEY.");
+    }
+    if (!this.cloudAdapter) {
+      this.cloudAdapter = new CloudBackend({
+        baseUrl: this.options.cloud.baseUrl,
+        apiKey: this.options.cloud.apiKey,
+        organizationId: this.options.cloud.organizationId,
+        assistantId: this.options.assistantId,
+        requestTimeoutMs: this.options.requestTimeoutMs,
+      });
+    }
+    return this.cloudAdapter;
   }
 
   private async getPlatformAdapter(): Promise<OpenClawAdapter> {
